@@ -28,7 +28,7 @@ recensement font l'objet d'un **tirage stratifié**, afin d'accroître la préci
 donc réparties en quatre strates de tirage : les résidences touristiques, les adresses de grande taille, les
 adresses nouvelles et les autres adresses;"
 
-"Les résultats des enquêtes annuelles de recensement font l’objet de redressements pour corriger la nonréponse totale et la non-réponse partielle. Une fois les données redressées, elles sont utilisées pour calculer
+"Les résultats des enquêtes annuelles de recensement font l’objet de redressements pour corriger la non-réponse totale et la non-réponse partielle. Une fois les données redressées, elles sont utilisées pour calculer
 les populations légales annuelles authentifiées par décret. L’Insee diffuse, en fin d’année N+2, les données
 de population relative au 1er janvier de l'année N. Pour cela, les données du dernier cycle quinquennal sont
 mobilisées, i.e. les **données des EAR N-2 à N+2**. Les méthodes d’estimations diffèrent selon la taille de la
