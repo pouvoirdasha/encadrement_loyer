@@ -1,0 +1,535 @@
+---
+title: "Analyse en composantes principales"
+author: "jlechat"
+date: "05/02/2026"
+output:
+  html_document:
+    toc: true        # active le menu
+    toc_float: true  # fait flotter le menu à gauche
+    toc_depth: 3     # profondeur des titres affichés dans le menu---
+---
+
+
+```{r setup, include=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(data.table)
+library(FactoMineR)
+library(factoextra)
+library(explor)
+setwd("~/0 ENSAE/3A/S2/Projet_socio_eco/encadrement_loyer/3 - ACP et clustering")
+```
+
+On commence par charger les données, en ne gardant que les communes de plus de 10 000 habitants (i.e. nombre de personnes en RP > 10 000 en 2022) :
+```{r}
+data = fread("../base_2012_2022.csv", encoding = "UTF-8")
+
+data_com = data[annee == 2022, .(pop = sum(nb_personnes_en_RP)),
+                by = c("COM", "annee")]
+
+liste_com = data_com[pop >10000, COM]
+
+df = data[COM %in% liste_com]
+```
+
+
+
+
+
+
+On réalise l'APC à l'aide du package `FactoMineR`. On réalise plusieurs ACP.
+
+# ACP sur les données 2017
+
+```{r}
+df_num <- df[annee==2017, .SD, .SDcols = is.numeric]
+  
+df_num = df_num[,-"annee"]
+
+res <- PCA(df_num,
+           scale.unit = TRUE,
+           graph = FALSE)
+
+summary(res)
+# explor(res)
+
+```
+
+```{r, warning=FALSE}
+fviz_pca_biplot(res, invisible = "ind")
+```
+
+```{r}
+fviz_pca_var(
+  res,
+  repel = TRUE,
+  col.var = "contrib"
+)
+
+
+fviz_pca_var(
+  res,
+  col.var = "contrib",
+  select.var = list(contrib = 5),
+  repel = TRUE
+)
+
+```
+
+```{r}
+fviz_pca_var(
+  res,
+  col.var = "cos2",
+  gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+  repel = TRUE
+)
+
+
+fviz_pca_var(
+  res,
+  col.var = "cos2",
+  select.var = list(cos2 = 0.90),
+  repel = TRUE,
+  gradient.cols = c("#E7B800", "#FC4E07"),
+
+  )
+
+```
+
+# ACP sur l'ensemble des données en format long
+
+```{r}
+df_num <- df[, .SD, .SDcols = is.numeric]
+  
+res <- PCA(df_num,
+           scale.unit = TRUE,
+           graph = FALSE)
+
+summary(res)
+# explor(res)
+
+```
+
+```{r, warning=FALSE}
+fviz_pca_biplot(res, invisible = "ind")
+```
+```{r}
+fviz_pca_var(
+  res,
+  repel = TRUE,
+  col.var = "contrib"
+)
+
+
+fviz_pca_var(
+  res,
+  col.var = "contrib",
+  select.var = list(contrib = 5),
+  repel = TRUE
+)
+
+```
+```{r}
+fviz_pca_var(
+  res,
+  col.var = "cos2",
+  gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+  repel = TRUE
+)
+
+
+fviz_pca_var(
+  res,
+  col.var = "cos2",
+  select.var = list(cos2 = 0.90),
+  repel = TRUE,
+  gradient.cols = c("#E7B800", "#FC4E07"),
+
+  )
+
+```
+# ACP sur l'ensemble des données au format large
+```{r}
+col_num = c("nb_menages", "nb_personnes_menage",
+            "nb_logements", "nb_RP_1_piece",
+            "nb_RP_2_pieces", "nb_RP_3_pieces", 
+            "nb_RP_4_pieces", "nb_RP_5_piece_et_plus",
+            "nb_RP_en_loc", "nb_RP_proprio",
+            "nb_personnes_en_RP", "nb_personnes_en_RP_location",
+            "nb_personnes_en_RP_proprio", "nb_residences_second_ou_occ",
+            "nb_logements_vacants", "nb_RP",
+            "nb_actifs", 
+            "nb_actifs_occ", "nb_chomeurs" ,
+            "nb_agriculteurs", "nb_commercants",
+            "nb_cadres", "nb_professions_inter")
+
+df_large = dcast(df, formula = IRIS + COM ~ annee,
+                 value.var = col_num)
+
+```
+
+```{r}
+df_num <- df_large[, .SD, .SDcols = is.numeric]
+  
+res <- PCA(df_num,
+           scale.unit = TRUE,
+           graph = FALSE)
+
+summary(res)
+
+# explor(res)
+```
+
+
+
+
+```{r, warning=FALSE}
+fviz_pca_biplot(res, invisible = "ind")
+```
+
+
+```{r}
+fviz_pca_var(
+  res,
+  repel = TRUE,
+  col.var = "contrib"
+)
+
+
+fviz_pca_var(
+  res,
+  col.var = "contrib",
+  select.var = list(contrib = 5),
+  repel = TRUE
+)
+
+```
+
+```{r}
+fviz_pca_var(
+  res,
+  col.var = "cos2",
+  gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+  repel = TRUE
+)
+
+
+fviz_pca_var(
+  res,
+  col.var = "cos2",
+  select.var = list(cos2 = 0.95),
+  repel = TRUE,
+  gradient.cols = c("#E7B800", "#FC4E07"),
+
+  )
+
+```
+
+
+
+# ACP en format large uniquement sur 2015, 2016 et 2017
+```{r}
+df_large = dcast(df[annee %in% c(2015, 2016, 2017)], 
+                 formula = IRIS + COM ~ annee,
+                 value.var = col_num)
+
+```
+
+```{r}
+df_num <- df_large[, .SD, .SDcols = is.numeric]
+  
+res <- PCA(df_num,
+           scale.unit = TRUE,
+           graph = FALSE)
+
+summary(res)
+```
+
+
+
+
+```{r, warning=FALSE}
+fviz_pca_biplot(res, invisible = "ind")
+```
+
+```{r}
+fviz_pca_var(
+  res,
+  repel = TRUE,
+  col.var = "contrib"
+)
+
+
+fviz_pca_var(
+  res,
+  col.var = "contrib",
+  select.var = list(contrib = 5),
+  repel = TRUE
+)
+
+```
+
+```{r}
+fviz_pca_var(
+  res,
+  col.var = "cos2",
+  gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+  repel = TRUE
+)
+
+
+fviz_pca_var(
+  res,
+  col.var = "cos2",
+  select.var = list(cos2 = 0.95),
+  repel = TRUE,
+  gradient.cols = c("#E7B800", "#FC4E07"),
+
+  )
+
+```
+
+
+
+# ACP avec diff entre 2015 et 2017
+```{r}
+df_large[, diff_pop_2015_2017 := nb_personnes_menage_2015 - nb_personnes_menage_2017]
+
+df_large[, diff_log_2015_2017 := nb_logements_2015 - nb_logements_2017]
+
+df_large[, diff_1_piece_2015_2017 := nb_RP_1_piece_2015 - nb_RP_1_piece_2017]
+
+df_large[, diff_loc_2015_2017 := nb_RP_en_loc_2015 - nb_RP_en_loc_2017]
+
+df_large[, diff_vacants_2015_2017 := nb_logements_vacants_2015 - nb_logements_vacants_2017]
+
+df_large[, diff_actifs_occ_2015_2017 := nb_actifs_occ_2015 - nb_actifs_occ_2017]
+
+```
+
+```{r}
+df_num <- df_large[, .SD, .SDcols = is.numeric]
+  
+res <- PCA(df_num,
+           scale.unit = TRUE,
+           graph = FALSE)
+
+summary(res)
+```
+
+
+
+
+```{r, warning=FALSE}
+fviz_pca_biplot(res, invisible = "ind")
+```
+
+```{r}
+fviz_pca_var(
+  res,
+  repel = TRUE,
+  col.var = "contrib"
+)
+
+
+fviz_pca_var(
+  res,
+  col.var = "contrib",
+  select.var = list(contrib = 5),
+  repel = TRUE
+)
+
+```
+
+```{r}
+fviz_pca_var(
+  res,
+  col.var = "cos2",
+  gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+  repel = TRUE
+)
+
+
+fviz_pca_var(
+  res,
+  col.var = "cos2",
+  select.var = list(cos2 = 0.95),
+  repel = TRUE,
+  gradient.cols = c("#E7B800", "#FC4E07"),
+
+  )
+
+```
+
+
+
+
+
+
+# Clustering sur les nouvelles coordonnées ACP à l'IRIS
+
+```{r}
+df_num_com <- df[annee==2017]
+
+
+
+df_num <- df_num_com[, .SD, .SDcols = is.numeric]
+
+  
+df_num = df_num[,-"annee"]
+
+
+res <- PCA(df_num,
+           scale.unit = TRUE,
+           graph = FALSE)
+
+```
+
+
+
+## K means avec 20 clusters
+
+```{r}
+set.seed(123)
+
+
+# on récupère les coordonnées
+ind_coords <- res$ind$coord
+
+ind_coords_sub <- ind_coords[, 1:2]  # sélection des axes 1 et 2
+
+
+km <- kmeans(ind_coords_sub, centers = 20, nstart = 25)
+
+df_cluster <- df_num_com
+df_cluster$cluster <- km$cluster
+
+```
+
+```{r}
+fviz_cluster(km, data = ind_coords_sub,
+             ellipse.type = "convex",
+             geom = "point",
+             palette = "jco",
+             repel = TRUE)
+```
+```{r}
+set.seed(123)
+
+
+# on récupère les coordonnées
+ind_coords <- res$ind$coord
+
+ind_coords_sub <- ind_coords[, 1:2]  # sélection des axes 1 et 2
+
+
+km <- kmeans(ind_coords_sub, centers = 100, nstart = 25)
+
+df_cluster <- df_num_com
+df_cluster$cluster <- km$cluster
+
+```
+
+```{r}
+fviz_cluster(km, data = ind_coords_sub,
+             ellipse.type = "convex",
+             geom = "point",
+             palette = "jco",
+             repel = TRUE)
+```
+Même avec 100 clusters on a les 100 clusters à Lille ou dans le 19e arrondissement de Paris.
+
+# ACP et clustering au niveau des villes
+
+```{r}
+data_com = df[, lapply(.SD, sum), by = c("COM", "annee"), .SDcols = is.numeric]
+
+```
+
+## ACP
+
+```{r}
+df_com_2017 <- data_com[annee==2017]
+
+
+
+df_num <- df_com_2017[, .SD, .SDcols = is.numeric]
+
+  
+df_num = df_num[,-"annee"]
+
+
+res <- PCA(df_num,
+           scale.unit = TRUE,
+           graph = FALSE)
+
+```
+
+```{r}
+fviz_pca_var(
+  res,
+  repel = TRUE,
+  col.var = "contrib"
+)
+
+
+fviz_pca_var(
+  res,
+  col.var = "contrib",
+  select.var = list(contrib = 5),
+  repel = TRUE
+)
+
+```
+
+## K means avec 10 clusters
+```{r}
+set.seed(123)
+
+
+# on récupère les coordonnées
+ind_coords <- res$ind$coord
+
+ind_coords_sub <- ind_coords[, 1:2]  # sélection des axes 1 et 2
+
+
+km <- kmeans(ind_coords_sub, centers = 10, nstart = 25)
+
+df_cluster <- df_com_2017
+df_cluster$cluster <- km$cluster
+
+fviz_cluster(km, data = ind_coords_sub,
+             ellipse.type = "convex",
+             geom = "point",
+             palette = "jco",
+             repel = TRUE)
+
+```
+
+
+```{r}
+df_cluster[, Paris := fifelse(substr(COM, 1, 3) == "751", 1, 0)]
+print(df_cluster[Paris == 1, c("COM", "cluster")])
+print(length(unique(df_cluster[Paris == 1, cluster])))
+
+```
+## K means avec 30 clusters
+
+```{r}
+km <- kmeans(ind_coords_sub, centers = 30, nstart = 25)
+
+df_cluster <- df_com_2017
+df_cluster$cluster <- km$cluster
+
+fviz_cluster(km, data = ind_coords_sub,
+             ellipse.type = "convex",
+             geom = "point",
+             palette = "jco",
+             repel = TRUE)
+```
+
+```{r}
+df_cluster[, Paris := fifelse(substr(COM, 1, 3) == "751", 1, 0)]
+print(df_cluster[Paris == 1, c("COM", "cluster")])
+print(length(unique(df_cluster[Paris == 1, cluster])))
+```
+
