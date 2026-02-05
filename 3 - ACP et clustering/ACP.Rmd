@@ -12,10 +12,13 @@ output:
 
 ```{r setup, include=FALSE, warning=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE)
+
 library(data.table)
 library(FactoMineR)
 library(factoextra)
 library(explor)
+library(RColorBrewer)
 setwd("~/0 ENSAE/3A/S2/Projet_socio_eco/encadrement_loyer/3 - ACP et clustering")
 ```
 
@@ -406,10 +409,12 @@ df_cluster$cluster <- km$cluster
 ```
 
 ```{r}
+
+palette_20 <- colorRampPalette(brewer.pal(12, "Paired"))(20)  # génère 30 couleurs distinctes
 fviz_cluster(km, data = ind_coords_sub,
              ellipse.type = "convex",
              geom = "point",
-             palette = "jco",
+             palette = palette_20,
              repel = TRUE)
 ```
 ```{r}
@@ -430,10 +435,11 @@ df_cluster$cluster <- km$cluster
 ```
 
 ```{r}
+palette_100 <- colorRampPalette(brewer.pal(12, "Paired"))(100)  # génère 30 couleurs distinctes
 fviz_cluster(km, data = ind_coords_sub,
              ellipse.type = "convex",
              geom = "point",
-             palette = "jco",
+             palette = palette_100,
              repel = TRUE)
 ```
 Même avec 100 clusters on a les 100 clusters à Lille ou dans le 19e arrondissement de Paris.
@@ -520,10 +526,13 @@ km <- kmeans(ind_coords_sub, centers = 30, nstart = 25)
 df_cluster <- df_com_2017
 df_cluster$cluster <- km$cluster
 
+palette_30 <- colorRampPalette(brewer.pal(12, "Paired"))(30)  # génère 30 couleurs distinctes
+
+
 fviz_cluster(km, data = ind_coords_sub,
              ellipse.type = "convex",
              geom = "point",
-             palette = "jco",
+             palette = palette_30,
              repel = TRUE)
 ```
 
