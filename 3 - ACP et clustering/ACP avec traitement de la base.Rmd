@@ -1,0 +1,368 @@
+---
+title: "ACP après traitement de la BDD"
+author: "jlechat"
+date: "08/02/2026"
+output:
+  html_document:
+    toc: true        
+    toc_float: true 
+    toc_depth: 3
+---
+
+En raison de la très forte corrélation des variables entre elles, on modifie le jeu de données pour avoir les parts relatives.
+
+```{r setup, include=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE)
+
+library(data.table)
+library(FactoMineR)
+library(factoextra)
+library(explor)
+library(RColorBrewer)
+setwd("~/0 ENSAE/3A/S2/Projet_socio_eco/encadrement_loyer/3 - ACP et clustering")
+```
+
+On commence par charger les données, en ne gardant que les communes de plus de 10 000 habitants (i.e. nombre de personnes en RP > 10 000 en 2022) :
+```{r}
+data = fread("../base_2012_2022.csv", encoding = "UTF-8")
+
+data_com = data[annee == 2022, .(pop = sum(nb_personnes_en_RP)),
+                by = c("COM", "annee")]
+
+liste_com = data_com[pop >10000, COM]
+
+df = data[COM %in% liste_com]
+```
+
+On fait quelques retraitements sur la base afin d'avoir des colonnes plus pertinentes :
+
+```{r}
+df[, part_RP_1_2_pieces := 100*(nb_RP_1_piece + nb_RP_2_pieces)/nb_RP]
+df[, part_RP_en_loc := 100*nb_RP_en_loc/nb_RP]
+
+df[, part_RP := 100*nb_RP/nb_logements]
+df[, part_logements_vacants := 100*nb_logements_vacants/nb_logements]
+
+df[, part_RP_proprio := 100*nb_RP_proprio/nb_RP]
+
+df[, part_actifs_pop := 100*nb_actifs/nb_personnes_menage]
+df[, part_etudiants_pop := 100*nb_etudiants/nb_personnes_menage]
+
+df[, part_chomeurs := 100*nb_chomeurs/nb_actifs]
+
+df[, part_agriculteurs := 100*nb_agriculteurs/nb_actifs_occ]
+df[, part_commercants := 100*nb_commercants/nb_actifs_occ]
+df[, part_cadres := 100*nb_cadres/nb_actifs_occ]
+df[, part_prof_inter := 100*nb_professions_inter/nb_actifs_occ]
+df[, part_employes := 100*nb_employes/nb_actifs_occ]
+
+df = df[, c("IRIS", "COM", "annee",
+            "nb_personnes_menage",
+            "part_actifs_pop", "part_etudiants_pop",
+            "part_chomeurs", "part_agriculteurs",
+            "part_commercants", "part_cadres", 
+            "part_prof_inter", "part_employes",
+            "nb_logements", "part_RP_1_2_pieces",
+            "part_RP_en_loc", "part_RP",
+            "part_logements_vacants", "part_RP_proprio"
+            )]
+
+df = df[nb_personnes_menage>0]
+```
+
+
+# Sur les données 2017 uniquement
+
+## ACP
+
+```{r, warning=FALSE}
+df_num <- df[annee==2017, .SD, .SDcols = is.numeric]
+  
+df_num = df_num[,-"annee"]
+
+res <- PCA(df_num,
+           scale.unit = TRUE,
+           graph = FALSE)
+
+summary(res)
+res$eig
+
+fviz_pca_var(
+  res,
+  col.var = "cos2",
+  gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+  repel = TRUE, 
+  axes = c(1,2) 
+)
+
+  
+  fviz_pca_var(
+  res,
+  col.var = "cos2",
+  gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+  repel = TRUE, 
+  axes = c(1,3) 
+)
+  
+fviz_pca_var(
+  res,
+  col.var = "cos2",
+  gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+  repel = TRUE, 
+  axes = c(2,3) 
+)
+
+```
+
+
+## k-means
+
+
+### Sur les deux premières dimensions
+
+```{r}
+set.seed(123)
+
+# on récupère les coordonnées
+ind_coords <- res$ind$coord
+
+ind_coords_sub <- ind_coords[, 1:2]  # sélection des axes 1 et 2
+
+fviz_nbclust(ind_coords_sub, kmeans, method = "silhouette")
+
+```
+
+
+```{r}
+km <- kmeans(ind_coords_sub, centers = 3, nstart = 25)
+
+
+df_cluster_2017 = df[annee == 2017, ]
+df_cluster_2017$cluster <- km$cluster
+
+fviz_cluster(km, data = ind_coords_sub,
+             ellipse.type = "convex",
+             geom = "point",
+             palette = "jco",
+             repel = TRUE)
+
+```
+
+### Sur les 5 premières dimensions
+
+```{r}
+
+ind_coords_sub <- ind_coords[, 1:5]  # sélection des axes 1 à 5
+
+fviz_nbclust(ind_coords_sub, kmeans, method = "silhouette")
+
+```
+
+
+```{r}
+km <- kmeans(ind_coords_sub, centers = 4, nstart = 25)
+
+
+df_4_cluster_2017 = df[annee == 2017, ]
+df_4_cluster_2017$cluster_IRIS <- km$cluster
+
+fviz_cluster(km, data = ind_coords_sub,
+             ellipse.type = "convex",
+             geom = "point",
+             palette = "jco",
+             repel = TRUE)
+
+```
+
+# Réalisation d'un double clustering
+
+Ici, on réalise un clustering supplémentaire sur les données agrégées à l'échelle des communes. On dertermine le cluster final = cluster IRIS X cluster COM
+
+```{r}
+df_com = data[, lapply(.SD, sum), by = c("COM", "annee"), .SDcols = is.numeric]
+
+df_com = df_com[nb_personnes_menage> 10000]
+
+df_com[, part_RP_1_2_pieces := 100*(nb_RP_1_piece + nb_RP_2_pieces)/nb_RP]
+df_com[, part_RP_en_loc := 100*nb_RP_en_loc/nb_RP]
+
+df_com[, part_RP := 100*nb_RP/nb_logements]
+df_com[, part_logements_vacants := 100*nb_logements_vacants/nb_logements]
+
+df_com[, part_RP_proprio := 100*nb_RP_proprio/nb_RP]
+
+df_com[, part_actifs_pop := 100*nb_actifs/nb_personnes_menage]
+df_com[, part_etudiants_pop := 100*nb_etudiants/nb_personnes_menage]
+
+df_com[, part_chomeurs := 100*nb_chomeurs/nb_actifs]
+
+df_com[, part_agriculteurs := 100*nb_agriculteurs/nb_actifs_occ]
+df_com[, part_commercants := 100*nb_commercants/nb_actifs_occ]
+df_com[, part_cadres := 100*nb_cadres/nb_actifs_occ]
+df_com[, part_prof_inter := 100*nb_professions_inter/nb_actifs_occ]
+df_com[, part_employes := 100*nb_employes/nb_actifs_occ]
+
+df_com = df_com[, c("COM", "annee",
+            "nb_personnes_menage",
+            "part_actifs_pop", "part_etudiants_pop",
+            "part_chomeurs", "part_agriculteurs",
+            "part_commercants", "part_cadres", 
+            "part_prof_inter", "part_employes",
+            "nb_logements", "part_RP_1_2_pieces",
+            "part_RP_en_loc", "part_RP",
+            "part_logements_vacants", "part_RP_proprio"
+            )]
+```
+
+
+## ACP
+
+```{r, warning=FALSE}
+df_com_num <- df_com[annee==2017, .SD, .SDcols = is.numeric]
+  
+df_com_num = df_com_num[,-"annee"]
+
+res <- PCA(df_com_num,
+           scale.unit = TRUE,
+           graph = FALSE)
+
+summary(res)
+res$eig
+
+fviz_pca_var(
+  res,
+  col.var = "cos2",
+  gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+  repel = TRUE, 
+  axes = c(1,2) 
+)
+
+  
+  fviz_pca_var(
+  res,
+  col.var = "cos2",
+  gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+  repel = TRUE, 
+  axes = c(1,3) 
+)
+  
+fviz_pca_var(
+  res,
+  col.var = "cos2",
+  gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+  repel = TRUE, 
+  axes = c(2,3) 
+)
+
+```
+
+## K means sur les 5 premiers axes
+
+```{r}
+# on récupère les coordonnées
+ind_coords <- res$ind$coord
+
+ind_coords_sub <- ind_coords[, 1:5]  # sélection des axes 1 à 5
+
+fviz_nbclust(ind_coords_sub, kmeans, method = "silhouette")
+```
+```{r}
+km <- kmeans(ind_coords_sub, centers = 5, nstart = 25)
+
+
+df_5_cluster_2017_com = df_com[annee == 2017]
+df_5_cluster_2017_com$cluster_com <- km$cluster
+
+fviz_cluster(km, data = ind_coords_sub,
+             ellipse.type = "convex",
+             geom = "point",
+             palette = "jco",
+             repel = TRUE)
+
+```
+
+## Clustering final
+
+
+On fait cluster = cluster IRIS X cluster COM
+
+```{r}
+df_cluster_COM_IRIS_2017 = merge(df_4_cluster_2017,
+                                 df_5_cluster_2017_com[, c("COM", "cluster_com")],
+                                 by = "COM",
+                                 all = TRUE)
+
+df_cluster_COM_IRIS_2017[, cluster := as.integer(paste0(cluster_com, cluster_IRIS))]
+
+```
+
+Ensemble des clusters :
+
+```{r}
+unique(df_cluster_COM_IRIS_2017[, cluster])
+```
+
+Clusters Parisiens
+
+```{r}
+clusters_paris = unique(df_cluster_COM_IRIS_2017[COM %in% c(as.character(75101:75120)), 
+                                cluster])
+clusters_paris
+```
+
+
+On vérifie que les clusters parisiens sont présents dans d'autres IRIS
+
+```{r}
+df_cluster_COM_IRIS_2017[cluster %in% clusters_paris & !(COM %in% c(as.character(75101:75120)))]
+```
+
+<style>
+
+/* Titres */
+h1 {
+  color: #ff7f00;   /* orange */
+  border-bottom: 2px solid #ff7f00;
+  padding-bottom: 5px;
+}
+
+h2 {
+  color: #ff9f1c;
+}
+
+h3 {
+  color: #ffbf69;
+}
+
+/* Texte */
+body {
+  font-family: "Helvetica Neue", Arial, sans-serif;
+  line-height: 1.6;
+  max-width: 900px;
+  margin: auto;
+}
+
+/* Blocs de code */
+pre {
+  background-color: #f7f7f7;
+  border-radius: 8px;
+  padding: 10px;
+}
+
+/* Tableaux */
+table {
+  border-collapse: collapse;
+}
+
+th {
+  background-color: #ff7f00;
+  color: white;
+}
+
+th, td {
+  padding: 8px;
+  border: 1px solid #ddd;
+}
+
+</style>
