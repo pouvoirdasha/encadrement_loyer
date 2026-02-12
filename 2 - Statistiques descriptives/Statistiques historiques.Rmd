@@ -1,0 +1,829 @@
+---
+title: "Statistiques historiques logements - Analyse détaillée"
+author: "jlechat"
+date: "12/02/2026"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    number_sections: true
+    theme: flatly
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(message = FALSE)
+knitr::opts_chunk$set(fig.width = 12, fig.height = 8)
+library(data.table)
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+library(scales)
+library(gridExtra)
+library(knitr)
+library(kableExtra)
+library(plotly)
+setwd("~/0 ENSAE/3A/S2/Projet_socio_eco/encadrement_loyer/2 - Statistiques descriptives")
+```
+
+# Chargement et préparation des données
+
+```{r}
+data = fread("../base-cc-serie-historique-2022.csv")
+communes = fread("../liste_communes_2025.csv", encoding = "UTF-8")
+
+data = merge(data, communes[, c("Code géographique",
+                                "Libellé géographique")],
+             by.x = "CODGEO",
+             by.y = "Code géographique")
+
+# Aperçu des données
+head(data)
+```
+
+```{r}
+# Dimensions du dataset
+cat("Nombre de communes:", nrow(data), "\n")
+cat("Nombre de variables:", ncol(data), "\n")
+```
+
+# Identification des 10 communes les plus peuplées
+
+```{r}
+# Identifier les 10 communes les plus peuplées en 2022
+top10_communes <- data[order(-P22_POP)][1:10, c("CODGEO", "Libellé géographique", "P22_POP")]
+setnames(top10_communes, c("Code", "Commune", "Population_2022"))
+
+kable(top10_communes, 
+      caption = "Les 10 communes les plus peuplées de France en 2022",
+      format.args = list(big.mark = " ")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+# Statistiques descriptives globales
+
+## Logements totaux
+
+```{r}
+# Variables de logements totaux à travers le temps
+vars_log <- c("P22_LOG", "P16_LOG", "P11_LOG", "P06_LOG", 
+              "D99_LOG", "D90_LOG", "D82_LOG", "D75_LOG", "D68_LOG")
+
+# Créer un tableau de statistiques descriptives
+stats_log <- data.frame(
+  Année = c(2022, 2016, 2011, 2006, 1999, 1990, 1982, 1975, 1968),
+  Total = sapply(vars_log, function(v) sum(data[[v]], na.rm = TRUE)),
+  Moyenne = sapply(vars_log, function(v) mean(data[[v]], na.rm = TRUE)),
+  Médiane = sapply(vars_log, function(v) median(data[[v]], na.rm = TRUE)),
+  Écart_type = sapply(vars_log, function(v) sd(data[[v]], na.rm = TRUE)),
+  Min = sapply(vars_log, function(v) min(data[[v]], na.rm = TRUE)),
+  Max = sapply(vars_log, function(v) max(data[[v]], na.rm = TRUE)),
+  Q1 = sapply(vars_log, function(v) quantile(data[[v]], 0.25, na.rm = TRUE)),
+  Q3 = sapply(vars_log, function(v) quantile(data[[v]], 0.75, na.rm = TRUE))
+)
+
+kable(stats_log, 
+      caption = "Statistiques descriptives - Nombre total de logements",
+      format.args = list(big.mark = " ")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+### Évolution du nombre total de logements
+
+```{r}
+ggplot(stats_log, aes(x = Année, y = Total)) +
+  geom_line(color = "darkblue", size = 1.2) +
+  geom_point(color = "darkblue", size = 3) +
+  scale_y_continuous(labels = label_number(scale = 1e-6, suffix = "M")) +
+  labs(title = "Évolution du nombre total de logements en France",
+       subtitle = "1968-2022",
+       x = "Année",
+       y = "Nombre de logements (en millions)") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 16, face = "bold"),
+        text = element_text(size = 12)) 
+```
+
+## Résidences principales
+
+```{r}
+# Variables de résidences principales
+vars_rp <- c("P22_RP", "P16_RP", "P11_RP", "P06_RP", 
+             "D99_RP", "D90_RP", "D82_RP", "D75_RP", "D68_RP")
+
+stats_rp <- data.frame(
+  Année = c(2022, 2016, 2011, 2006, 1999, 1990, 1982, 1975, 1968),
+  Total = sapply(vars_rp, function(v) sum(data[[v]], na.rm = TRUE)),
+  Moyenne = sapply(vars_rp, function(v) mean(data[[v]], na.rm = TRUE)),
+  Médiane = sapply(vars_rp, function(v) median(data[[v]], na.rm = TRUE)),
+  Écart_type = sapply(vars_rp, function(v) sd(data[[v]], na.rm = TRUE)),
+  Min = sapply(vars_rp, function(v) min(data[[v]], na.rm = TRUE)),
+  Max = sapply(vars_rp, function(v) max(data[[v]], na.rm = TRUE))
+)
+
+kable(stats_rp, 
+      caption = "Statistiques descriptives - Résidences principales",
+      format.args = list(big.mark = " ")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+### Évolution des résidences principales
+
+```{r}
+ggplot(stats_rp, aes(x = Année, y = Total)) +
+  geom_line(color = "forestgreen", size = 1.2) +
+  geom_point(color = "forestgreen", size = 3) +
+  scale_y_continuous(labels = label_number(scale = 1e-6, suffix = "M")) +
+  labs(title = "Évolution du nombre de résidences principales en France",
+       subtitle = "1968-2022",
+       x = "Année",
+       y = "Nombre de résidences principales (en millions)") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 16, face = "bold"))
+```
+
+## Résidences secondaires et logements occasionnels
+
+```{r}
+# Variables de résidences secondaires
+vars_rs <- c("P22_RSECOCC", "P16_RSECOCC", "P11_RSECOCC", "P06_RSECOCC", 
+             "D99_RSECOCC", "D90_RSECOCC", "D82_RSECOCC", "D75_RSECOCC", "D68_RSECOCC")
+
+stats_rs <- data.frame(
+  Année = c(2022, 2016, 2011, 2006, 1999, 1990, 1982, 1975, 1968),
+  Total = sapply(vars_rs, function(v) sum(data[[v]], na.rm = TRUE)),
+  Moyenne = sapply(vars_rs, function(v) mean(data[[v]], na.rm = TRUE)),
+  Médiane = sapply(vars_rs, function(v) median(data[[v]], na.rm = TRUE)),
+  Écart_type = sapply(vars_rs, function(v) sd(data[[v]], na.rm = TRUE)),
+  Min = sapply(vars_rs, function(v) min(data[[v]], na.rm = TRUE)),
+  Max = sapply(vars_rs, function(v) max(data[[v]], na.rm = TRUE))
+)
+
+kable(stats_rs, 
+      caption = "Statistiques descriptives - Résidences secondaires et logements occasionnels",
+      format.args = list(big.mark = " ")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+### Évolution des résidences secondaires
+
+```{r}
+ggplot(stats_rs, aes(x = Année, y = Total)) +
+  geom_line(color = "darkorange", size = 1.2) +
+  geom_point(color = "darkorange", size = 3) +
+  scale_y_continuous(labels = label_number(scale = 1e-6, suffix = "M")) +
+  labs(title = "Évolution du nombre de résidences secondaires en France",
+       subtitle = "1968-2022",
+       x = "Année",
+       y = "Nombre de résidences secondaires (en millions)") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 16, face = "bold"))
+```
+
+## Logements vacants
+
+```{r}
+# Variables de logements vacants
+vars_vac <- c("P22_LOGVAC", "P16_LOGVAC", "P11_LOGVAC", "P06_LOGVAC", 
+              "D99_LOGVAC", "D90_LOGVAC", "D82_LOGVAC", "D75_LOGVAC", "D68_LOGVAC")
+
+stats_vac <- data.frame(
+  Année = c(2022, 2016, 2011, 2006, 1999, 1990, 1982, 1975, 1968),
+  Total = sapply(vars_vac, function(v) sum(data[[v]], na.rm = TRUE)),
+  Moyenne = sapply(vars_vac, function(v) mean(data[[v]], na.rm = TRUE)),
+  Médiane = sapply(vars_vac, function(v) median(data[[v]], na.rm = TRUE)),
+  Écart_type = sapply(vars_vac, function(v) sd(data[[v]], na.rm = TRUE)),
+  Min = sapply(vars_vac, function(v) min(data[[v]], na.rm = TRUE)),
+  Max = sapply(vars_vac, function(v) max(data[[v]], na.rm = TRUE))
+)
+
+kable(stats_vac, 
+      caption = "Statistiques descriptives - Logements vacants",
+      format.args = list(big.mark = " ")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+### Évolution des logements vacants
+
+```{r}
+ggplot(stats_vac, aes(x = Année, y = Total)) +
+  geom_line(color = "red", size = 1.2) +
+  geom_point(color = "red", size = 3) +
+  scale_y_continuous(labels = label_number(scale = 1e-6, suffix = "M")) +
+  labs(title = "Évolution du nombre de logements vacants en France",
+       subtitle = "1968-2022",
+       x = "Année",
+       y = "Nombre de logements vacants (en millions)") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 16, face = "bold"))
+```
+
+## Personnes des ménages
+
+```{r}
+# Variables de personnes des ménages
+vars_pmen <- c("P22_PMEN", "P16_PMEN", "P11_PMEN", "P06_PMEN", "D99_PMEN",
+               "D90_NPER_RP", "D82_NPER_RP", "D75_NPER_RP", "D68_NPER_RP")
+
+stats_pmen <- data.frame(
+  Année = c(2022, 2016, 2011, 2006, 1999, 1990, 1982, 1975, 1968),
+  Total = sapply(vars_pmen, function(v) sum(data[[v]], na.rm = TRUE)),
+  Moyenne = sapply(vars_pmen, function(v) mean(data[[v]], na.rm = TRUE)),
+  Médiane = sapply(vars_pmen, function(v) median(data[[v]], na.rm = TRUE)),
+  Écart_type = sapply(vars_pmen, function(v) sd(data[[v]], na.rm = TRUE))
+)
+
+kable(stats_pmen, 
+      caption = "Statistiques descriptives - Personnes des ménages",
+      format.args = list(big.mark = " ")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+## Graphique comparatif global
+
+```{r}
+# Créer un dataframe combiné pour comparaison
+comparaison <- data.frame(
+  Année = c(2022, 2016, 2011, 2006, 1999, 1990, 1982, 1975, 1968),
+  Logements_totaux = stats_log$Total,
+  Résidences_principales = stats_rp$Total,
+  Résidences_secondaires = stats_rs$Total,
+  Logements_vacants = stats_vac$Total
+)
+
+comparaison_long <- pivot_longer(comparaison, 
+                                  cols = -Année, 
+                                  names_to = "Type", 
+                                  values_to = "Nombre")
+
+ggplot(comparaison_long, aes(x = Année, y = Nombre, color = Type, group = Type)) +
+  geom_line(size = 1.2) +
+  geom_point(size = 3) +
+  scale_y_continuous(labels = label_number(scale = 1e-6, suffix = "M")) +
+  scale_color_manual(values = c("Logements_totaux" = "darkblue",
+                                 "Résidences_principales" = "forestgreen",
+                                 "Résidences_secondaires" = "darkorange",
+                                 "Logements_vacants" = "red")) +
+  labs(title = "Évolution comparée des différents types de logements",
+       subtitle = "France, 1968-2022",
+       x = "Année",
+       y = "Nombre (en millions)",
+       color = "Type de logement") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 16, face = "bold"),
+        legend.position = "bottom")
+```
+
+## Parts relatives des types de logements
+
+```{r}
+# Calculer les parts
+comparaison$Part_RP <- comparaison$Résidences_principales / comparaison$Logements_totaux * 100
+comparaison$Part_RS <- comparaison$Résidences_secondaires / comparaison$Logements_totaux * 100
+comparaison$Part_Vac <- comparaison$Logements_vacants / comparaison$Logements_totaux * 100
+
+kable(comparaison[, c("Année", "Part_RP", "Part_RS", "Part_Vac")], 
+      caption = "Parts des différents types de logements (%)",
+      digits = 1,
+      col.names = c("Année", "Rés. principales (%)", "Rés. secondaires (%)", "Logements vacants (%)")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+```{r}
+parts_long <- pivot_longer(comparaison, 
+                           cols = c(Part_RP, Part_RS, Part_Vac), 
+                           names_to = "Type", 
+                           values_to = "Part")
+
+ggplot(parts_long, aes(x = Année, y = Part, fill = Type)) +
+  geom_area(alpha = 0.7) +
+  scale_fill_manual(values = c("Part_RP" = "forestgreen",
+                                "Part_RS" = "darkorange",
+                                "Part_Vac" = "red"),
+                    labels = c("Résidences principales", "Résidences secondaires", "Logements vacants")) +
+  labs(title = "Composition du parc de logements français",
+       subtitle = "1968-2022",
+       x = "Année",
+       y = "Part (%)",
+       fill = "Type") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 16, face = "bold"),
+        legend.position = "bottom")
+```
+
+# Analyse des 10 communes les plus peuplées
+
+## Préparation des données pour les 10 communes
+
+```{r}
+# Extraire les données des 10 communes
+top10_codes <- top10_communes$Code
+data_top10 <- data[CODGEO %in% top10_codes]
+
+# Créer un dataset long pour l'analyse temporelle
+create_long_data <- function(data, vars, var_name) {
+  result <- data.table()
+  years <- c(2022, 2016, 2011, 2006, 1999, 1990, 1982, 1975, 1968)
+  
+  for(i in 1:length(vars)) {
+    temp <- data[, c("CODGEO", "Libellé géographique", vars[i]), with = FALSE]
+    temp$Année <- years[i]
+    setnames(temp, vars[i], var_name)
+    result <- rbind(result, temp)
+  }
+  return(result)
+}
+
+# Créer les datasets longs
+log_long <- create_long_data(data_top10, vars_log, "Logements")
+rp_long <- create_long_data(data_top10, vars_rp, "Résidences_principales")
+rs_long <- create_long_data(data_top10, vars_rs, "Résidences_secondaires")
+vac_long <- create_long_data(data_top10, vars_vac, "Logements_vacants")
+pmen_long <- create_long_data(data_top10, vars_pmen, "Personnes_ménages")
+```
+
+## Évolution des logements totaux - Top 10
+
+```{r}
+
+ggplot(log_long, 
+                aes(x = Année, y = Logements, color = `Libellé géographique`)) +
+  geom_line(size = 1) +
+  geom_point(size = 2) +
+  scale_y_continuous(labels = label_number()) +
+  labs(title = "Évolution du nombre de logements",
+       subtitle = "10 communes les plus peuplées de France",
+       x = "Année",
+       y = "Nombre de logements",
+       color = "Commune") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14, face = "bold"),
+        legend.position = "right",
+        legend.text = element_text(size = 8))
+
+ggplotly(ggplot(log_long, 
+                aes(x = Année, y = Logements, color = `Libellé géographique`)) +
+  geom_line(size = 1) +
+  geom_point(size = 2) +
+  scale_y_continuous(labels = label_number()) +
+  labs(title = "Évolution du nombre de logements",
+       subtitle = "10 communes les plus peuplées de France",
+       x = "Année",
+       y = "Nombre de logements",
+       color = "Commune") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14, face = "bold"),
+        legend.position = "right",
+        legend.text = element_text(size = 8)))
+```
+
+
+
+## Évolution des résidences principales - Top 10
+
+```{r}
+ggplot(rp_long, aes(x = Année, y = Résidences_principales, color = `Libellé géographique`)) +
+  geom_line(size = 1) +
+  geom_point(size = 2) +
+  scale_y_continuous(labels = label_number()) +
+  labs(title = "Évolution du nombre de résidences principales",
+       subtitle = "10 communes les plus peuplées de France",
+       x = "Année",
+       y = "Nombre de résidences principales",
+       color = "Commune") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14, face = "bold"),
+        legend.position = "right",
+        legend.text = element_text(size = 8))
+
+ggplotly(ggplot(rp_long, aes(x = Année, y = Résidences_principales, color = `Libellé géographique`)) +
+  geom_line(size = 1) +
+  geom_point(size = 2) +
+  scale_y_continuous(labels = label_number()) +
+  labs(title = "Évolution du nombre de résidences principales",
+       subtitle = "10 communes les plus peuplées de France",
+       x = "Année",
+       y = "Nombre de résidences principales",
+       color = "Commune") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14, face = "bold"),
+        legend.position = "right",
+        legend.text = element_text(size = 8)))
+```
+
+## Évolution des résidences secondaires - Top 10
+
+```{r}
+ggplot(rs_long, aes(x = Année, y = Résidences_secondaires, color = `Libellé géographique`)) +
+  geom_line(size = 1) +
+  geom_point(size = 2) +
+  scale_y_continuous(labels = label_number()) +
+  labs(title = "Évolution du nombre de résidences secondaires",
+       subtitle = "10 communes les plus peuplées de France",
+       x = "Année",
+       y = "Nombre de résidences secondaires",
+       color = "Commune") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14, face = "bold"),
+        legend.position = "right",
+        legend.text = element_text(size = 8))
+
+ggplotly(ggplot(rs_long, aes(x = Année, y = Résidences_secondaires, color = `Libellé géographique`)) +
+  geom_line(size = 1) +
+  geom_point(size = 2) +
+  scale_y_continuous(labels = label_number()) +
+  labs(title = "Évolution du nombre de résidences secondaires",
+       subtitle = "10 communes les plus peuplées de France",
+       x = "Année",
+       y = "Nombre de résidences secondaires",
+       color = "Commune") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14, face = "bold"),
+        legend.position = "right",
+        legend.text = element_text(size = 8)))
+```
+
+## Évolution des logements vacants - Top 10
+
+```{r}
+ggplot(vac_long, aes(x = Année, y = Logements_vacants, color = `Libellé géographique`)) +
+  geom_line(size = 1) +
+  geom_point(size = 2) +
+  scale_y_continuous(labels = label_number()) +
+  labs(title = "Évolution du nombre de logements vacants",
+       subtitle = "10 communes les plus peuplées de France",
+       x = "Année",
+       y = "Nombre de logements vacants",
+       color = "Commune") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14, face = "bold"),
+        legend.position = "right",
+        legend.text = element_text(size = 8))
+
+ggplotly(ggplot(vac_long, aes(x = Année, y = Logements_vacants, color = `Libellé géographique`)) +
+  geom_line(size = 1) +
+  geom_point(size = 2) +
+  scale_y_continuous(labels = label_number()) +
+  labs(title = "Évolution du nombre de logements vacants",
+       subtitle = "10 communes les plus peuplées de France",
+       x = "Année",
+       y = "Nombre de logements vacants",
+       color = "Commune") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14, face = "bold"),
+        legend.position = "right",
+        legend.text = element_text(size = 8)))
+```
+
+## Évolution des personnes des ménages - Top 10
+
+```{r}
+ggplot(pmen_long, aes(x = Année, y = Personnes_ménages, color = `Libellé géographique`)) +
+  geom_line(size = 1) +
+  geom_point(size = 2) +
+  scale_y_continuous(labels = label_number()) +
+  labs(title = "Évolution du nombre de personnes des ménages",
+       subtitle = "10 communes les plus peuplées de France",
+       x = "Année",
+       y = "Nombre de personnes",
+       color = "Commune") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14, face = "bold"),
+        legend.position = "right",
+        legend.text = element_text(size = 8))
+
+ggplotly(ggplot(pmen_long, aes(x = Année, y = Personnes_ménages, color = `Libellé géographique`)) +
+  geom_line(size = 1) +
+  geom_point(size = 2) +
+  scale_y_continuous(labels = label_number()) +
+  labs(title = "Évolution du nombre de personnes des ménages",
+       subtitle = "10 communes les plus peuplées de France",
+       x = "Année",
+       y = "Nombre de personnes",
+       color = "Commune") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14, face = "bold"),
+        legend.position = "right",
+        legend.text = element_text(size = 8)))
+```
+
+# Analyse détaillée RP vs Résidences secondaires
+
+## Calcul des variations
+
+```{r}
+# Fusionner RP et RS
+rp_rs <- merge(rp_long, rs_long, 
+               by = c("CODGEO", "Libellé géographique", "Année"))
+
+# Calculer les parts
+rp_rs$Part_RP <- rp_rs$Résidences_principales / 
+  (rp_rs$Résidences_principales + rp_rs$Résidences_secondaires) * 100
+rp_rs$Part_RS <- rp_rs$Résidences_secondaires / 
+  (rp_rs$Résidences_principales + rp_rs$Résidences_secondaires) * 100
+
+# Calculer les variations depuis 1968
+rp_rs_1968 <- rp_rs[Année == 1968]
+setnames(rp_rs_1968, 
+         c("Résidences_principales", "Résidences_secondaires"),
+         c("RP_1968", "RS_1968"))
+rp_rs_1968 <- rp_rs_1968[, c("CODGEO", "RP_1968", "RS_1968")]
+
+rp_rs <- merge(rp_rs, rp_rs_1968, by = "CODGEO")
+rp_rs$Variation_RP <- (rp_rs$Résidences_principales - rp_rs$RP_1968) / rp_rs$RP_1968 * 100
+rp_rs$Variation_RS <- (rp_rs$Résidences_secondaires - rp_rs$RS_1968) / rp_rs$RS_1968 * 100
+```
+
+## Parts RP/RS par commune en 2022
+
+```{r}
+rp_rs_2022 <- rp_rs[Année == 2022]
+rp_rs_2022 <- rp_rs_2022[order(-Résidences_principales)]
+
+kable(rp_rs_2022[, c("Libellé géographique", "Résidences_principales", 
+                     "Résidences_secondaires", "Part_RP", "Part_RS")],
+      caption = "Résidences principales vs secondaires en 2022 - Top 10",
+      digits = 1,
+      col.names = c("Commune", "Rés. principales", "Rés. secondaires", 
+                    "Part RP (%)", "Part RS (%)"),
+      format.args = list(big.mark = " ")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+## Évolution de la part de résidences principales
+
+```{r}
+ggplot(rp_rs, aes(x = Année, y = Part_RP, color = `Libellé géographique`)) +
+  geom_line(size = 1) +
+  geom_point(size = 2) +
+  labs(title = "Évolution de la part de résidences principales",
+       subtitle = "10 communes les plus peuplées de France",
+       x = "Année",
+       y = "Part de résidences principales (%)",
+       color = "Commune") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14, face = "bold"),
+        legend.position = "right",
+        legend.text = element_text(size = 8))
+```
+
+## Évolution de la part de résidences secondaires
+
+```{r}
+ggplot(rp_rs, aes(x = Année, y = Part_RS, color = `Libellé géographique`)) +
+  geom_line(size = 1) +
+  geom_point(size = 2) +
+  labs(title = "Évolution de la part de résidences secondaires",
+       subtitle = "10 communes les plus peuplées de France",
+       x = "Année",
+       y = "Part de résidences secondaires (%)",
+       color = "Commune") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14, face = "bold"),
+        legend.position = "right",
+        legend.text = element_text(size = 8))
+```
+
+## Variation RP vs RS depuis 1968
+
+```{r}
+ggplot(rp_rs, aes(x = Année, y = Variation_RP, color = `Libellé géographique`)) +
+  geom_line(size = 1) +
+  geom_point(size = 2) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+  labs(title = "Variation des résidences principales par rapport à 1968",
+       subtitle = "10 communes les plus peuplées de France",
+       x = "Année",
+       y = "Variation depuis 1968 (%)",
+       color = "Commune") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14, face = "bold"),
+        legend.position = "right",
+        legend.text = element_text(size = 8))
+```
+
+```{r}
+ggplot(rp_rs, aes(x = Année, y = Variation_RS, color = `Libellé géographique`)) +
+  geom_line(size = 1) +
+  geom_point(size = 2) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+  labs(title = "Variation des résidences secondaires par rapport à 1968",
+       subtitle = "10 communes les plus peuplées de France",
+       x = "Année",
+       y = "Variation depuis 1968 (%)",
+       color = "Commune") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14, face = "bold"),
+        legend.position = "right",
+        legend.text = element_text(size = 8))
+```
+
+## Graphiques facettés par commune
+
+### RP vs RS - Facettes
+
+```{r fig.height=12}
+ggplot(rp_rs, aes(x = Année)) +
+  geom_line(aes(y = Résidences_principales, color = "RP"), size = 1) +
+  geom_line(aes(y = Résidences_secondaires, color = "RS"), size = 1) +
+  facet_wrap(~ `Libellé géographique`, scales = "free_y", ncol = 4) +
+  scale_color_manual(values = c("RP" = "forestgreen", "RS" = "darkorange"),
+                     labels = c("Résidences principales", "Résidences secondaires")) +
+  labs(title = "Évolution RP vs RS par commune",
+       x = "Année",
+       y = "Nombre",
+       color = "Type") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14, face = "bold"),
+        legend.position = "bottom",
+        strip.text = element_text(size = 8))
+```
+
+### Parts relatives - Facettes
+
+```{r fig.height=12}
+ggplot(rp_rs, aes(x = Année)) +
+  geom_area(aes(y = Part_RP, fill = "RP"), alpha = 0.7) +
+  geom_area(aes(y = Part_RP + Part_RS, fill = "RS"), alpha = 0.7) +
+  facet_wrap(~ `Libellé géographique`, ncol = 4) +
+  scale_fill_manual(values = c("RP" = "forestgreen", "RS" = "darkorange"),
+                    labels = c("Résidences principales", "Résidences secondaires")) +
+  labs(title = "Parts relatives RP vs RS par commune",
+       x = "Année",
+       y = "Part (%)",
+       fill = "Type") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14, face = "bold"),
+        legend.position = "bottom",
+        strip.text = element_text(size = 8))
+```
+
+# Analyse des logements vacants
+
+## Taux de logements vacants global
+
+```{r}
+# Fusionner logements et vacants
+log_vac <- merge(log_long, vac_long, 
+                 by = c("CODGEO", "Libellé géographique", "Année"))
+
+log_vac$Taux_vacance <- log_vac$Logements_vacants / log_vac$Logements * 100
+```
+
+## Évolution du Taux de logements vacants - Top 10
+
+```{r}
+ggplot(log_vac, aes(x = Année, y = Taux_vacance, color = `Libellé géographique`)) +
+  geom_line(size = 1) +
+  geom_point(size = 2) +
+  labs(title = "Évolution du Taux de logements vacants",
+       subtitle = "10 communes les plus peuplées de France",
+       x = "Année",
+       y = "Taux de logements vacants (%)",
+       color = "Commune") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14, face = "bold"),
+        legend.position = "right",
+        legend.text = element_text(size = 8))
+```
+
+## Taux de logements vacants en 2022
+
+```{r}
+log_vac_2022 <- log_vac[Année == 2022]
+log_vac_2022 <- log_vac_2022[order(-Taux_vacance)]
+
+ggplot(log_vac_2022, aes(x = reorder(`Libellé géographique`, Taux_vacance), 
+                         y = Taux_vacance)) +
+  geom_col(fill = "red", alpha = 0.7) +
+  coord_flip() +
+  labs(title = "Taux de logements vacants en 2022",
+       subtitle = "10 communes les plus peuplées de France",
+       x = "",
+       y = "Taux de logements vacants (%)") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14, face = "bold"))
+```
+
+# Densité et occupation
+
+## Nombre de personnes par résidence principale
+
+```{r}
+# Fusionner personnes et RP
+pmen_rp <- merge(pmen_long, rp_long, 
+                 by = c("CODGEO", "Libellé géographique", "Année"))
+
+pmen_rp$Pers_par_RP <- pmen_rp$Personnes_ménages / pmen_rp$Résidences_principales
+```
+
+## Évolution du nombre moyen de personnes par RP
+
+```{r}
+ggplot(pmen_rp, aes(x = Année, y = Pers_par_RP, color = `Libellé géographique`)) +
+  geom_line(size = 1) +
+  geom_point(size = 2) +
+  labs(title = "Évolution du nombre moyen de personnes par résidence principale",
+       subtitle = "10 communes les plus peuplées de France",
+       x = "Année",
+       y = "Nombre de personnes par RP",
+       color = "Commune") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14, face = "bold"),
+        legend.position = "right",
+        legend.text = element_text(size = 8))
+```
+
+## Taille moyenne des ménages en 2022 vs 1968
+
+```{r}
+pmen_rp_comp <- pmen_rp[Année %in% c(1968, 2022)]
+pmen_rp_comp_wide <- dcast(pmen_rp_comp, 
+                           `Libellé géographique` ~ Année, 
+                           value.var = "Pers_par_RP")
+setnames(pmen_rp_comp_wide, c("1968", "2022"), c("Pers_RP_1968", "Pers_RP_2022"))
+pmen_rp_comp_wide$Variation <- pmen_rp_comp_wide$Pers_RP_2022 - pmen_rp_comp_wide$Pers_RP_1968
+
+kable(pmen_rp_comp_wide[order(-Variation)],
+      caption = "Évolution du nombre de personnes par RP (1968-2022)",
+      digits = 2,
+      col.names = c("Commune", "1968", "2022", "Variation")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+
+# Taux de croissance annuels
+
+## Calcul des taux de croissance
+
+```{r}
+# Fonction pour calculer le taux de croissance annuel moyen
+calc_tcam <- function(data, var_name, year1, year2) {
+  data_temp <- data[Année %in% c(year1, year2)]
+  data_wide <- dcast(data_temp, `Libellé géographique` ~ Année, 
+                     value.var = var_name)
+  
+  n_years <- year2 - year1
+  data_wide$TCAM <- ((data_wide[[as.character(year2)]] / 
+                      data_wide[[as.character(year1)]]) ^ (1/n_years) - 1) * 100
+  
+  return(data_wide[, c("Libellé géographique", "TCAM")])
+}
+
+# TCAM logements 2016-2022
+tcam_log_recent <- calc_tcam(log_long, "Logements", 2016, 2022)
+setnames(tcam_log_recent, "TCAM", "TCAM_Log_2016_2022")
+
+# TCAM RP 2016-2022
+tcam_rp_recent <- calc_tcam(rp_long, "Résidences_principales", 2016, 2022)
+setnames(tcam_rp_recent, "TCAM", "TCAM_RP_2016_2022")
+
+# TCAM RS 2016-2022
+tcam_rs_recent <- calc_tcam(rs_long, "Résidences_secondaires", 2016, 2022)
+setnames(tcam_rs_recent, "TCAM", "TCAM_RS_2016_2022")
+
+# Fusionner
+tcam_recent <- merge(tcam_log_recent, tcam_rp_recent, by = "Libellé géographique")
+tcam_recent <- merge(tcam_recent, tcam_rs_recent, by = "Libellé géographique")
+
+kable(tcam_recent[order(-TCAM_Log_2016_2022)],
+      caption = "Taux de croissance annuel moyen 2016-2022 (%)",
+      digits = 2,
+      col.names = c("Commune", "Logements totaux", "Rés. principales", "Rés. secondaires")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+## Graphiques des TCAM
+
+```{r}
+tcam_long <- pivot_longer(tcam_recent, 
+                          cols = -`Libellé géographique`, 
+                          names_to = "Type", 
+                          values_to = "TCAM")
+
+ggplot(tcam_long, aes(x = reorder(`Libellé géographique`, TCAM), 
+                      y = TCAM, fill = Type)) +
+  geom_col(position = "dodge") +
+  coord_flip() +
+  scale_fill_manual(values = c("TCAM_Log_2016_2022" = "darkblue",
+                                "TCAM_RP_2016_2022" = "forestgreen",
+                                "TCAM_RS_2016_2022" = "darkorange"),
+                    labels = c("Logements totaux", "Rés. principales", "Rés. secondaires")) +
+  labs(title = "Taux de croissance annuel moyen 2016-2022",
+       subtitle = "10 communes les plus peuplées",
+       x = "",
+       y = "TCAM (%)",
+       fill = "Type") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14, face = "bold"),
+        legend.position = "bottom")
+```
+
+
+
+---
+
+**Fin du rapport**
