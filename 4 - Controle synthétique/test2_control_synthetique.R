@@ -5,7 +5,6 @@ setwd("~/0 ENSAE/3A/S2/Projet_socio_eco/encadrement_loyer/4 - Controle synthéti
 
 data = fread("../base_2012_2022.csv", encoding = "UTF-8")
 
-data = data[COM != "74011"]
 
 # Agrégation à l'échelle de Paris (car 1 seule unité traitée)
 data[, COM := fifelse(substr(COM, 1, 3) == "751", 
@@ -146,7 +145,9 @@ obs_par_commune <- data_methode1[, .(
   max_annee  = max(annee)
 ), by = COM]
 
+# c'est ok
 
+ 
 
 dataprep_out <- dataprep(
   foo                = as.data.frame(data_methode1),
@@ -154,12 +155,12 @@ dataprep_out <- dataprep(
   predictors.op      = "mean",             # moyenne sur la période pré
   special.predictors = list(
     # On contrôle aussi le lag de la variable outcome à différentes dates
-    list("nb_RP_en_loc", 2012, "mean"),
-    list("nb_RP_en_loc", 2014, "mean"),
-    list("nb_RP_en_loc", 2016, "mean"),
-    list("nb_RP_en_loc", 2018, "mean")
+    list("part_loc", 2012, "mean"),
+    list("part_loc", 2014, "mean"),
+    list("part_loc", 2016, "mean"),
+    list("part_loc", 2018, "mean")
   ),
-  dependent          = "nb_RP_en_loc",
+  dependent          = "part_loc",
   unit.variable      = "id_num",
   unit.names.variable = "COM",
   time.variable      = "annee",
