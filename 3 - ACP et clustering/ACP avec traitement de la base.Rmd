@@ -281,6 +281,10 @@ fviz_cluster(km, data = ind_coords_sub,
              repel = TRUE)
 
 ```
+### Export des données cluster communes 
+```{r}
+df_cluster_com = df_5_cluster_2017_com[, c("COM", "cluster_com")]
+```
 
 ## Clustering final
 

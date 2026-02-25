@@ -25,7 +25,7 @@ correspondance_COM = fread("../correspondance_com.csv",
                            sep = ";", encoding = "UTF-8")
 
 # VARIABLES A AJUSTER ----
-seuil_menages <- 40000  
+seuil_menages <- 10000  
 
 # com = "75119"
 
@@ -99,7 +99,7 @@ cat("Ensemble des communes (avec Paris) :", uniqueN(data_synth$COM), "\n")
 ##################################################
 sauv_pourcenge = c()
 
-for (com in 75117:75120) {
+for (com in 75101:75120) {
   print(com)
   
   nom_graph = paste0("Paris, ", substr(com, 4, 5), "eme Arrond.")
