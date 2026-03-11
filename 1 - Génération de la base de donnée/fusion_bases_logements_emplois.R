@@ -1,10 +1,18 @@
 library(dplyr)
 library(magrittr)
+library(data.table)
 
-logements <- read.csv("Logements/logements_2012_2022.csv", sep = ";")
-emplois <- read.csv("Emplois/emplois_2012_2022.csv", sep = ";")
-date <- read.csv("date_encadrement_des_loyers.csv", sep = ";") %>%
-  mutate(INSEE_COM = as.character(INSEE_COM), date_encadrement = as.Date(Date.de.début.de.l.encadrement, format = "%d/%m/%y"))
+
+logements_1 <- fread("logements_2012_2022.csv", sep = ";")
+logements_2 <- fread("logements_2006_2011.csv", sep = ";")
+logements = rbdind(logements_1, logements_2)
+rm(logements_1, logements_2)
+
+emplois_1 <- fread("emplois_2012_2022.csv", sep = ";")
+emplois_2 <- fread("emplois_2006_2011.csv", sep = ";")
+emplois = rbind(emplois_1, emplois_2)
+rm(emplois_1, emplois_2)
+
 
 # On joint sur IRIS et annee
 base_finale <- logements %>%
@@ -17,6 +25,4 @@ if("COM.x" %in% names(base_finale)){
     select(-any_of("COM.y"))
 }
 
-base_finale <- base_finale %>% left_join(date, by = c("COM" = "INSEE_COM")) 
-
-write.csv2(base_finale, "base_2012_2022.csv", row.names = FALSE)
+fwrite(base_finale, "base_2006_2022.csv", row.names = FALSE)
