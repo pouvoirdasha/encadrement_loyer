@@ -12,7 +12,7 @@ output:
 En raison de la très forte corrélation des variables entre elles, on modifie le jeu de données pour avoir les parts relatives.
 
 ```{r setup, include=FALSE, warning=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE, echo = TRUE)
 knitr::opts_chunk$set(warning = FALSE)
 
 library(data.table)
@@ -20,12 +20,12 @@ library(FactoMineR)
 library(factoextra)
 library(explor)
 library(RColorBrewer)
-setwd("~/0 ENSAE/3A/S2/Projet_socio_eco/encadrement_loyer/3 - ACP et clustering")
+#setwd("~/0 ENSAE/3A/S2/Projet_socio_eco/encadrement_loyer/3 - ACP et clustering")
 ```
 
 On commence par charger les données, en ne gardant que les communes de plus de 10 000 habitants (i.e. nombre de personnes en RP > 10 000 en 2022) :
 ```{r}
-data = fread("../base_2012_2022.csv", encoding = "UTF-8")
+data = fread("../base_2006_2022.csv", encoding = "UTF-8")
 
 data_com = data[annee == 2022, .(pop = sum(nb_personnes_en_RP)),
                 by = c("COM", "annee")]
@@ -313,6 +313,40 @@ Clusters Parisiens
 clusters_paris = unique(df_cluster_COM_IRIS_2017[COM %in% c(as.character(75101:75120)), 
                                 cluster])
 clusters_paris
+```
+
+Export des communes avec Paris
+```{r}
+# communes de Paris
+paris_com <- as.character(75101:75120)
+
+# 1. clusters présents à Paris
+clusters_paris <- unique(
+  df_cluster_COM_IRIS_2017[
+    COM %in% paris_com,
+    cluster
+  ]
+)
+
+# 2. communes hors Paris ayant des IRIS dans ces clusters
+communes_cluster_paris <- unique(
+  df_cluster_COM_IRIS_2017[
+    !(COM %in% paris_com) & cluster %in% clusters_paris,
+    COM
+  ]
+)
+
+# 3. transformer en data.table pour export
+communes_cluster_paris_dt <- data.table(COM = communes_cluster_paris)
+
+# 4. export CSV
+fwrite(
+  communes_cluster_paris_dt,
+  "communes_cluster_paris.csv"
+)
+
+# petit contrôle
+cat("Nombre de communes retenues :", length(communes_cluster_paris), "\n")
 ```
 
 
