@@ -9,6 +9,7 @@ library(ggplot2)
 # =========================================================
 
 communes_cluster_paris <- fread("communes_sans_petite_couronne.csv")
+#récupérer ce fichier sur le drive
 liste_com <- as.character(communes_cluster_paris$COM)
 
 data <- fread("base_2006_2022.csv")
@@ -321,3 +322,49 @@ effet_total <- ATT * n_iris_paris
 
 effet_total_pct <- (effet_total / total_paris_2017) * 100
 effet_total_pct
+
+# Robustesse :
+# distribution des poids
+ggplot(
+  df_ebal %>% filter(treated == 0),
+  aes(x = w_ebal)
+) +
+  geom_density(fill = "steelblue", alpha = 0.5) +
+  labs(
+    title = "Distribution des poids entropy balancing",
+    x = "Poids",
+    y = "Densité"
+  )
+
+# graphique de contribution des communes
+poids_commune <- df_ebal %>%
+  filter(treated == 0) %>%
+  group_by(code_com) %>%
+  summarise(poids_total = sum(w_ebal))
+
+# fonctionne que chez Matis car il faut le fichier avec les noms
+poids_commune <- fread("poids_communes_entropy_balancing_avec_noms.csv")
+ggplot(poids_commune, aes(x = reorder(nom_commune, poids_total), y = poids_total)) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    title = "Contribution des communes au groupe contrôle pondéré",
+    x = "Commune",
+    y = "Poids total"
+  )
+
+top_communes <- poids_commune %>%
+  slice_max(poids_total, n = 30)
+
+ggplot(
+  top_communes,
+  aes(x = reorder(nom_commune, poids_total), y = poids_total)
+) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(
+    title = "Top 30 des communes contribuant au contrefactuel de Paris",
+    x = "Commune",
+    y = "Poids total"
+  ) +
+  theme_minimal()
