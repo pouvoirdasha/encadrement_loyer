@@ -81,6 +81,12 @@ ui <- fluidPage(
         choices = candidate_vars,
         selected = NULL
       ),
+      selectInput(
+        "extra_pretrend_var",
+        "Variable additionnelle à caler en différence sur la même période pré-traitement",
+        choices = c("Aucune", candidate_vars),
+        selected = "Aucune"
+      ),
       uiOutput("extra_ebal_year_ui"),
       helpText("Ces variables sont calées en niveau à l'année choisie."),
       hr(),
@@ -101,6 +107,12 @@ ui <- fluidPage(
         "Variables supplémentaires dans la régression DID",
         choices = candidate_vars,
         selected = NULL
+      ),
+      selectInput(
+        "reg_treatment_diff_var",
+        "Variable additionnelle en différence sur la période de traitement (régression)",
+        choices = c("Aucune", candidate_vars),
+        selected = "Aucune"
       ),
       uiOutput("reg_controls_years_ui"),
       hr(),
@@ -139,6 +151,12 @@ ui <- fluidPage(
           br(),
           plotOutput("trend_plot", height = "420px"),
           plotOutput("trend_plot_index", height = "420px"),
+          h4("Tendance complète avec toutes les années disponibles"),
+          plotOutput("trend_full_plot", height = "420px"),
+          plotOutput("trend_full_plot_index", height = "420px"),
+          h4("Décomposition année par année — variable principale"),
+          plotOutput("trend_micro_plot", height = "420px"),
+          plotOutput("trend_micro_plot_index", height = "420px"),
           h4("Tendance annuelle entre les deux années de pré-traitement"),
           DTOutput("trend_table")
         ),
@@ -297,7 +315,9 @@ server <- function(input, output, session) {
       need(!is.null(input$post_year_1) && !is.null(input$post_year_2), "Choisis les deux années de la période de traitement."),
       need(input$main_var %in% names(data), "La variable principale n'existe pas dans la base."),
       need(all(input$extra_ebal_vars %in% names(data)), "Au moins une variable de calage additionnelle est absente de la base."),
-      need(all(input$reg_controls %in% names(data)), "Au moins une variable de régression est absente de la base.")
+      need(input$extra_pretrend_var == "Aucune" || input$extra_pretrend_var %in% names(data), "La variable additionnelle de pré-trend est absente de la base."),
+      need(all(input$reg_controls %in% names(data)), "Au moins une variable de régression est absente de la base."),
+      need(input$reg_treatment_diff_var == "Aucune" || input$reg_treatment_diff_var %in% names(data), "La variable additionnelle en différence de traitement est absente de la base.")
     )
     
     pre_y1 <- as.integer(input$match_year_1)
@@ -354,6 +374,34 @@ server <- function(input, output, session) {
         !!outcome_name := .data[[post_name_2]] - .data[[post_name_1]]
       )
     
+    extra_pretrend_name <- character(0)
+    if (!is.null(input$extra_pretrend_var) && input$extra_pretrend_var != "Aucune") {
+      df_pretrend_extra <- df_reduced %>%
+        filter(annee %in% c(pre_y1, pre_y2)) %>%
+        select(IRIS, code_com, treated, annee, all_of(input$extra_pretrend_var)) %>%
+        distinct() %>%
+        pivot_wider(
+          names_from = annee,
+          values_from = all_of(input$extra_pretrend_var),
+          names_prefix = "tmp_"
+        )
+      
+      tmp_pre_1 <- paste0("tmp_", pre_y1)
+      tmp_pre_2 <- paste0("tmp_", pre_y2)
+      extra_pretrend_name <- paste0("d_", input$extra_pretrend_var, "_", pre_y1, "_", pre_y2)
+      
+      validate(
+        need(all(c(tmp_pre_1, tmp_pre_2) %in% names(df_pretrend_extra)), "Impossible de construire la différence pré-traitement de la variable additionnelle.")
+      )
+      
+      df_pretrend_extra <- df_pretrend_extra %>%
+        mutate(!!extra_pretrend_name := .data[[tmp_pre_2]] - .data[[tmp_pre_1]]) %>%
+        select(IRIS, code_com, treated, all_of(extra_pretrend_name))
+      
+      df_ebal <- df_ebal %>%
+        left_join(df_pretrend_extra, by = c("IRIS", "code_com", "treated"))
+    }
+    
     extra_balance_names <- character(0)
     if (length(input$extra_ebal_vars) > 0) {
       df_extra <- df_reduced %>%
@@ -373,6 +421,34 @@ server <- function(input, output, session) {
     }
     
     reg_control_names <- character(0)
+    reg_treatment_diff_name <- character(0)
+    if (!is.null(input$reg_treatment_diff_var) && input$reg_treatment_diff_var != "Aucune") {
+      df_reg_diff <- df_reduced %>%
+        filter(annee %in% c(post_y1, post_y2)) %>%
+        select(IRIS, code_com, treated, annee, all_of(input$reg_treatment_diff_var)) %>%
+        distinct() %>%
+        pivot_wider(
+          names_from = annee,
+          values_from = all_of(input$reg_treatment_diff_var),
+          names_prefix = "regtmp_"
+        )
+      
+      regtmp_1 <- paste0("regtmp_", post_y1)
+      regtmp_2 <- paste0("regtmp_", post_y2)
+      reg_treatment_diff_name <- paste0("d_", input$reg_treatment_diff_var, "_", post_y1, "_", post_y2)
+      
+      validate(
+        need(all(c(regtmp_1, regtmp_2) %in% names(df_reg_diff)), "Impossible de construire la différence de traitement de la variable additionnelle de régression.")
+      )
+      
+      df_reg_diff <- df_reg_diff %>%
+        mutate(!!reg_treatment_diff_name := .data[[regtmp_2]] - .data[[regtmp_1]]) %>%
+        select(IRIS, code_com, treated, all_of(reg_treatment_diff_name))
+      
+      df_ebal <- df_ebal %>%
+        left_join(df_reg_diff, by = c("IRIS", "code_com", "treated"))
+    }
+    
     if (length(input$reg_controls) > 0) {
       for (v in input$reg_controls) {
         yr <- as.integer(input[[paste0("reg_year_", v)]])
@@ -390,7 +466,7 @@ server <- function(input, output, session) {
       }
     }
     
-    required_vars <- c(pre_name_1, pre_name_2, post_name_1, post_name_2, diff_name, outcome_name, extra_balance_names, reg_control_names)
+    required_vars <- c(pre_name_1, pre_name_2, post_name_1, post_name_2, diff_name, outcome_name, extra_balance_names, reg_control_names, reg_treatment_diff_name)
     
     df_ebal <- df_ebal %>%
       filter(if_all(all_of(required_vars), ~ !is.na(.x)))
@@ -402,7 +478,7 @@ server <- function(input, output, session) {
       need(sum(df_ebal$treated == 1) > 0, "Pas d'IRIS Paris après filtrage.")
     )
     
-    X_names <- c(diff_name, extra_balance_names)
+    X_names <- c(diff_name, extra_pretrend_name, extra_balance_names)
     X_ebal <- as.matrix(df_ebal %>% select(all_of(X_names)))
     
     eb_out <- ebalance(
@@ -422,10 +498,18 @@ server <- function(input, output, session) {
       )
     }))
     
-    mean_treated_post <- safe_weighted_mean(df_ebal[[outcome_name]][df_ebal$treated == 1], df_ebal$w_ebal[df_ebal$treated == 1])
-    mean_control_post <- safe_weighted_mean(df_ebal[[outcome_name]][df_ebal$treated == 0], df_ebal$w_ebal[df_ebal$treated == 0])
-    ate <- mean_treated_post - mean_control_post
+    rhs <- c("treated")
+    if (isTRUE(input$include_pretrend_reg)) rhs <- c(rhs, diff_name)
+    if (length(reg_treatment_diff_name) > 0) rhs <- c(rhs, reg_treatment_diff_name)
+    if (length(reg_control_names) > 0) rhs <- c(rhs, reg_control_names)
     
+    formula_simple <- as.formula(paste(outcome_name, "~ treated"))
+    formula_final <- as.formula(paste(outcome_name, "~", paste(rhs, collapse = " + ")))
+    
+    mod_simple <- lm(formula_simple, data = df_ebal, weights = w_ebal)
+    mod_final <- lm(formula_final, data = df_ebal, weights = w_ebal)
+    
+    ate <- unname(coef(mod_final)["treated"])
     n_iris_paris <- sum(df_ebal$treated == 1, na.rm = TRUE)
     effet_total_paris <- ate * n_iris_paris
     total_paris_reference <- sum(df_ebal[[post_name_1]][df_ebal$treated == 1], na.rm = TRUE)
@@ -434,16 +518,6 @@ server <- function(input, output, session) {
     } else {
       NA_real_
     }
-    
-    rhs <- c("treated")
-    if (isTRUE(input$include_pretrend_reg)) rhs <- c(rhs, diff_name)
-    if (length(reg_control_names) > 0) rhs <- c(rhs, reg_control_names)
-    
-    formula_simple <- as.formula(paste(outcome_name, "~ treated"))
-    formula_final <- as.formula(paste(outcome_name, "~", paste(rhs, collapse = " + ")))
-    
-    mod_simple <- lm(formula_simple, data = df_ebal, weights = w_ebal)
-    mod_final <- lm(formula_final, data = df_ebal, weights = w_ebal)
     
     df_plot <- df_ebal %>%
       select(IRIS, code_com, treated, w_ebal, all_of(c(pre_name_1, pre_name_2, post_name_1, post_name_2))) %>%
@@ -484,6 +558,37 @@ server <- function(input, output, session) {
       filter(!is.na(w_ebal)) %>%
       mutate(groupe = ifelse(treated == 1, "Paris", "Contrôle pondéré"))
     
+    weights_controls <- df_ebal %>%
+      filter(treated == 0) %>%
+      select(IRIS, code_com, w_ebal) %>%
+      distinct()
+    
+    df_full_trend <- df_reduced %>%
+      filter(annee >= min(available_years()), annee <= max(available_years())) %>%
+      left_join(weights_controls, by = c("IRIS", "code_com")) %>%
+      mutate(
+        w_plot = ifelse(treated == 1, 1, w_ebal),
+        groupe = ifelse(treated == 1, "Paris", "Contrôle pondéré")
+      ) %>%
+      filter(treated == 1 | !is.na(w_plot))
+    
+    trend_full <- df_full_trend %>%
+      group_by(groupe, annee) %>%
+      summarise(
+        mean_outcome = safe_weighted_mean(.data[[input$main_var]], w_plot),
+        .groups = "drop"
+      ) %>%
+      arrange(annee, groupe)
+    
+    trend_full_index <- trend_full %>%
+      group_by(groupe) %>%
+      mutate(
+        base_year = min(annee),
+        base_value = mean_outcome[annee == base_year][1],
+        evol_depuis_base = mean_outcome - base_value
+      ) %>%
+      ungroup()
+    
     trend_micro <- df_micro %>%
       group_by(groupe, annee) %>%
       summarise(
@@ -491,6 +596,15 @@ server <- function(input, output, session) {
         .groups = "drop"
       ) %>%
       arrange(annee, groupe)
+    
+    trend_micro_index <- trend_micro %>%
+      group_by(groupe) %>%
+      mutate(
+        base_year = min(annee),
+        base_value = mean_outcome[annee == base_year][1],
+        evol_depuis_base = mean_outcome - base_value
+      ) %>%
+      ungroup()
     
     weights_by_commune <- df_ebal %>%
       filter(treated == 0) %>%
@@ -516,7 +630,7 @@ server <- function(input, output, session) {
     top_communes <- weights_by_commune %>%
       slice_head(n = input$top_n_communes)
     
-    compare_vars <- unique(c(diff_name, outcome_name, extra_balance_names, reg_control_names))
+    compare_vars <- unique(c(diff_name, outcome_name, extra_pretrend_name, extra_balance_names, reg_treatment_diff_name, reg_control_names))
     selected_vars_comparison <- bind_rows(lapply(compare_vars, function(v) {
       data.frame(
         variable = v,
@@ -538,10 +652,14 @@ server <- function(input, output, session) {
       mod_final = mod_final,
       trend_plot = trend_plot,
       trend_plot_index = trend_plot_index,
+      trend_full = trend_full,
+      trend_full_index = trend_full_index,
       trend_micro = trend_micro,
       weights_by_commune = weights_by_commune,
       top_communes = top_communes,
       selected_vars_comparison = selected_vars_comparison,
+      trend_micro_index = trend_micro_index,
+      extra_pretrend_name = extra_pretrend_name,
       diff_name = diff_name,
       outcome_name = outcome_name,
       pre_y1 = pre_y1,
@@ -550,7 +668,8 @@ server <- function(input, output, session) {
       post_y2 = post_y2,
       main_var = input$main_var,
       extra_balance_names = extra_balance_names,
-      reg_control_names = reg_control_names
+      reg_control_names = reg_control_names,
+      reg_treatment_diff_name = reg_treatment_diff_name
     )
   })
   
@@ -564,10 +683,14 @@ server <- function(input, output, session) {
     cat("Nombre d'observations dans la base d'analyse :", nrow(res$df_ebal), "\n")
     cat("Nombre d'IRIS Paris :", sum(res$df_ebal$treated == 1), "\n")
     cat("Nombre d'IRIS contrôle :", sum(res$df_ebal$treated == 0), "\n\n")
-    cat("Variables additionnelles de calage :\n")
-    print(if (length(res$extra_balance_names) == 0) "Aucune" else res$extra_balance_names)
-    cat("\nVariables supplémentaires dans la régression :\n")
-    print(if (length(res$reg_control_names) == 0) "Aucune" else res$reg_control_names)
+    cat("Variables additionnelles de calage :
+")
+    print(if (length(c(res$extra_pretrend_name, res$extra_balance_names)) == 0) "Aucune" else c(res$extra_pretrend_name, res$extra_balance_names))
+    cat("
+Variables supplémentaires dans la régression :
+")
+    reg_vars <- c(res$reg_treatment_diff_name, res$reg_control_names)
+    print(if (length(reg_vars) == 0) "Aucune" else reg_vars)
   })
   
   output$balance_table <- renderDT({
@@ -582,8 +705,10 @@ server <- function(input, output, session) {
   
   output$ate_text <- renderPrint({
     res <- analysis()
-    cat("ATE pondéré estimé sur", res$outcome_name, ":", round(res$ate, 4), "\n")
-    cat("Interprétation : effet moyen estimé par IRIS parisien.\n")
+    cat("ATE estimé (régression finale) sur", res$outcome_name, ":", round(res$ate, 4), "
+")
+    cat("Interprétation : effet moyen conditionnel estimé par IRIS parisien.
+")
   })
   
   output$effet_paris_text <- renderPrint({
@@ -591,7 +716,10 @@ server <- function(input, output, session) {
     cat("Nombre d'IRIS parisiens :", res$n_iris_paris, "\n")
     cat("Effet total estimé sur l'ensemble de Paris :", round(res$effet_total_paris, 2), "\n")
     cat("Niveau de référence à Paris (année", res$post_y1, ") :", round(res$total_paris_reference, 2), "\n")
-    cat("Effet total estimé en pourcentage du niveau parisien de référence :", round(res$effet_total_pct_paris, 4), "%\n")
+    cat("Effet total estimé en pourcentage du niveau parisien de référence :", round(res$effet_total_pct_paris, 4), "%
+")
+    cat("Ces calculs agrégés sont basés sur le coefficient treated de la régression finale.
+")
   })
   
   output$model_text <- renderPrint({
@@ -629,6 +757,72 @@ server <- function(input, output, session) {
       labs(
         title = "Évolution cumulée depuis l'année de base",
         subtitle = paste0("Pré-trend imposé sur ", res$diff_name),
+        x = "Année",
+        y = "Variation par rapport à l'année de base",
+        color = "Groupe"
+      ) +
+      theme_minimal()
+  })
+  
+  output$trend_full_plot <- renderPlot({
+    res <- analysis()
+    ggplot(res$trend_full, aes(x = annee, y = mean_outcome, color = groupe, group = groupe)) +
+      geom_line(linewidth = 1.2) +
+      geom_point(size = 2.8) +
+      geom_vline(xintercept = c(res$pre_y1, res$pre_y2, res$post_y1, res$post_y2), linetype = c("dotted", "dashed", "dotted", "dashed")) +
+      scale_x_continuous(breaks = sort(unique(res$trend_full$annee))) +
+      labs(
+        title = "Tendance complète — toutes les années disponibles",
+        subtitle = paste0("Variable : ", res$main_var),
+        x = "Année",
+        y = paste0("Moyenne pondérée de ", res$main_var),
+        color = "Groupe"
+      ) +
+      theme_minimal()
+  })
+  
+  output$trend_full_plot_index <- renderPlot({
+    res <- analysis()
+    ggplot(res$trend_full_index, aes(x = annee, y = evol_depuis_base, color = groupe, group = groupe)) +
+      geom_line(linewidth = 1.2) +
+      geom_point(size = 2.8) +
+      geom_vline(xintercept = c(res$pre_y1, res$pre_y2, res$post_y1, res$post_y2), linetype = c("dotted", "dashed", "dotted", "dashed")) +
+      scale_x_continuous(breaks = sort(unique(res$trend_full_index$annee))) +
+      labs(
+        title = "Tendance complète indexée — toutes les années disponibles",
+        subtitle = paste0("Variable : ", res$main_var),
+        x = "Année",
+        y = "Variation par rapport à l'année de base",
+        color = "Groupe"
+      ) +
+      theme_minimal()
+  })
+  
+  output$trend_micro_plot <- renderPlot({
+    res <- analysis()
+    ggplot(res$trend_micro, aes(x = annee, y = mean_outcome, color = groupe, group = groupe)) +
+      geom_line(linewidth = 1.2) +
+      geom_point(size = 2.8) +
+      scale_x_continuous(breaks = sort(unique(res$trend_micro$annee))) +
+      labs(
+        title = "Décomposition année par année — niveaux",
+        subtitle = paste0("Entre ", res$pre_y1, " et ", res$pre_y2),
+        x = "Année",
+        y = paste0("Moyenne pondérée de ", res$main_var),
+        color = "Groupe"
+      ) +
+      theme_minimal()
+  })
+  
+  output$trend_micro_plot_index <- renderPlot({
+    res <- analysis()
+    ggplot(res$trend_micro_index, aes(x = annee, y = evol_depuis_base, color = groupe, group = groupe)) +
+      geom_line(linewidth = 1.2) +
+      geom_point(size = 2.8) +
+      scale_x_continuous(breaks = sort(unique(res$trend_micro_index$annee))) +
+      labs(
+        title = "Décomposition année par année — base 0",
+        subtitle = paste0("Entre ", res$pre_y1, " et ", res$pre_y2),
         x = "Année",
         y = "Variation par rapport à l'année de base",
         color = "Groupe"
