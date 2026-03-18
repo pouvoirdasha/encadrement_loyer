@@ -64,6 +64,11 @@ ui <- fluidPage(
         "Exclure les IRIS ayant 0 logement au moins une année",
         value = FALSE
       ),
+      checkboxInput(
+        "exclude_na_logements",
+        "Exclure les IRIS ayant NA logement au moins une année",
+        value = FALSE
+      ),
       selectInput(
         "main_var",
         "Variable principale",
@@ -351,36 +356,77 @@ server <- function(input, output, session) {
     n_iris_zero_removed <- 0L
     n_iris_zero_removed_paris <- 0L
     n_iris_zero_removed_control <- 0L
+    n_iris_na_removed <- 0L
+    n_iris_na_removed_paris <- 0L
+    n_iris_na_removed_control <- 0L
     
-    if (isTRUE(input$exclude_zero_logements)) {
+    filter_start_year <- pre_y1
+    filter_end_year <- max(available_years())
+    
+    if (isTRUE(input$exclude_zero_logements) || isTRUE(input$exclude_na_logements)) {
       validate(
-        need("nb_logements" %in% names(df_reduced), "La variable nb_logements est absente de la base, impossible d'exclure les IRIS avec 0 logement.")
+        need("nb_logements" %in% names(df_reduced), "La variable nb_logements est absente de la base, impossible de filtrer les IRIS sur les logements.")
       )
       
-      iris_zero_logements <- df_reduced %>%
-        group_by(IRIS) %>%
-        summarise(has_zero_logements = any(nb_logements == 0, na.rm = TRUE), .groups = "drop") %>%
-        filter(has_zero_logements) %>%
-        pull(IRIS)
+      df_logements_window <- df_reduced %>%
+        filter(annee >= filter_start_year, annee <= filter_end_year)
       
-      n_iris_zero_removed <- length(unique(iris_zero_logements))
+      iris_to_remove <- character(0)
       
-      iris_zero_detail <- df_reduced %>%
-        filter(IRIS %in% iris_zero_logements) %>%
-        distinct(IRIS, treated)
+      if (isTRUE(input$exclude_zero_logements)) {
+        iris_zero_logements <- df_logements_window %>%
+          group_by(IRIS) %>%
+          summarise(has_zero_logements = any(nb_logements == 0, na.rm = TRUE), .groups = "drop") %>%
+          filter(has_zero_logements) %>%
+          pull(IRIS)
+        
+        n_iris_zero_removed <- length(unique(iris_zero_logements))
+        
+        iris_zero_detail <- df_reduced %>%
+          filter(IRIS %in% iris_zero_logements) %>%
+          distinct(IRIS, treated)
+        
+        n_iris_zero_removed_paris <- iris_zero_detail %>%
+          filter(treated == 1) %>%
+          distinct(IRIS) %>%
+          nrow()
+        
+        n_iris_zero_removed_control <- iris_zero_detail %>%
+          filter(treated == 0) %>%
+          distinct(IRIS) %>%
+          nrow()
+        
+        iris_to_remove <- union(iris_to_remove, iris_zero_logements)
+      }
       
-      n_iris_zero_removed_paris <- iris_zero_detail %>%
-        filter(treated == 1) %>%
-        distinct(IRIS) %>%
-        nrow()
-      
-      n_iris_zero_removed_control <- iris_zero_detail %>%
-        filter(treated == 0) %>%
-        distinct(IRIS) %>%
-        nrow()
+      if (isTRUE(input$exclude_na_logements)) {
+        iris_na_logements <- df_logements_window %>%
+          group_by(IRIS) %>%
+          summarise(has_na_logements = any(is.na(nb_logements)), .groups = "drop") %>%
+          filter(has_na_logements) %>%
+          pull(IRIS)
+        
+        n_iris_na_removed <- length(unique(iris_na_logements))
+        
+        iris_na_detail <- df_reduced %>%
+          filter(IRIS %in% iris_na_logements) %>%
+          distinct(IRIS, treated)
+        
+        n_iris_na_removed_paris <- iris_na_detail %>%
+          filter(treated == 1) %>%
+          distinct(IRIS) %>%
+          nrow()
+        
+        n_iris_na_removed_control <- iris_na_detail %>%
+          filter(treated == 0) %>%
+          distinct(IRIS) %>%
+          nrow()
+        
+        iris_to_remove <- union(iris_to_remove, iris_na_logements)
+      }
       
       df_reduced <- df_reduced %>%
-        filter(!IRIS %in% iris_zero_logements)
+        filter(!IRIS %in% iris_to_remove)
     }
     
     n_iris_after_zero_filter <- df_reduced %>% distinct(IRIS) %>% nrow()
@@ -695,6 +741,9 @@ server <- function(input, output, session) {
       n_iris_zero_removed = n_iris_zero_removed,
       n_iris_zero_removed_paris = n_iris_zero_removed_paris,
       n_iris_zero_removed_control = n_iris_zero_removed_control,
+      n_iris_na_removed = n_iris_na_removed,
+      n_iris_na_removed_paris = n_iris_na_removed_paris,
+      n_iris_na_removed_control = n_iris_na_removed_control,
       n_iris_after_zero_filter = n_iris_after_zero_filter,
       n_iris_after_zero_filter_paris = n_iris_after_zero_filter_paris,
       n_iris_after_zero_filter_control = n_iris_after_zero_filter_control,
@@ -731,12 +780,18 @@ server <- function(input, output, session) {
   
   output$sample_info <- renderPrint({
     res <- analysis()
-    cat("Variable principale :", res$main_var, "\n")
-    cat("Différence de calage pré-traitement :", res$diff_name, "\n")
-    cat("Différence de traitement / outcome :", res$outcome_name, "\n")
-    cat("Période de calage :", res$pre_y1, "->", res$pre_y2, "\n")
-    cat("Période de traitement :", res$post_y1, "->", res$post_y2, "\n\n")
-    cat("Nombre d'IRIS avant éventuelle exclusion 0 logement :", res$n_iris_initial, "
+    cat("Variable principale :", res$main_var, "
+")
+    cat("Différence de calage pré-traitement :", res$diff_name, "
+")
+    cat("Différence de traitement / outcome :", res$outcome_name, "
+")
+    cat("Période de calage :", res$pre_y1, "->", res$pre_y2, "
+")
+    cat("Période de traitement :", res$post_y1, "->", res$post_y2, "
+
+")
+    cat("Nombre d'IRIS avant éventuelle exclusion logements :", res$n_iris_initial, "
 ")
     cat("  - Paris :", res$n_iris_initial_paris, "
 ")
@@ -748,6 +803,14 @@ server <- function(input, output, session) {
 ")
     cat("  - Contrôle :", res$n_iris_zero_removed_control, "
 ")
+    cat("Nombre d'IRIS retirés pour NA logement :", res$n_iris_na_removed, "
+")
+    cat("  - Paris :", res$n_iris_na_removed_paris, "
+")
+    cat("  - Contrôle :", res$n_iris_na_removed_control, "
+")
+    cat("Fenêtre utilisée pour ces filtres logements : de ", res$pre_y1, " à ", max(res$trend_full$annee), "
+", sep = "")
     cat("Nombre d'IRIS après ce filtre :", res$n_iris_after_zero_filter, "
 ")
     cat("  - Paris :", res$n_iris_after_zero_filter_paris, "
@@ -756,8 +819,11 @@ server <- function(input, output, session) {
 ")
     cat("Nombre d'observations dans la base d'analyse :", nrow(res$df_ebal), "
 ")
-    cat("Nombre d'IRIS Paris :", sum(res$df_ebal$treated == 1), "\n")
-    cat("Nombre d'IRIS contrôle :", sum(res$df_ebal$treated == 0), "\n\n")
+    cat("Nombre d'IRIS Paris :", sum(res$df_ebal$treated == 1), "
+")
+    cat("Nombre d'IRIS contrôle :", sum(res$df_ebal$treated == 0), "
+
+")
     cat("Variables additionnelles de calage :
 ")
     print(if (length(c(res$extra_pretrend_name, res$extra_balance_names)) == 0) "Aucune" else c(res$extra_pretrend_name, res$extra_balance_names))
