@@ -59,6 +59,11 @@ ui <- fluidPage(
       hr(),
       
       h4("2. Variable principale"),
+      checkboxInput(
+        "exclude_zero_logements",
+        "Exclure les IRIS ayant 0 logement au moins une année",
+        value = FALSE
+      ),
       selectInput(
         "main_var",
         "Variable principale",
@@ -339,6 +344,48 @@ server <- function(input, output, session) {
       mutate(code_com = as.character(COM)) %>%
       filter(code_com %in% donor_com | code_com %in% paris_com) %>%
       mutate(treated = as.integer(code_com %in% paris_com))
+    
+    n_iris_initial <- df_reduced %>% distinct(IRIS) %>% nrow()
+    n_iris_initial_paris <- df_reduced %>% filter(treated == 1) %>% distinct(IRIS) %>% nrow()
+    n_iris_initial_control <- df_reduced %>% filter(treated == 0) %>% distinct(IRIS) %>% nrow()
+    n_iris_zero_removed <- 0L
+    n_iris_zero_removed_paris <- 0L
+    n_iris_zero_removed_control <- 0L
+    
+    if (isTRUE(input$exclude_zero_logements)) {
+      validate(
+        need("nb_logements" %in% names(df_reduced), "La variable nb_logements est absente de la base, impossible d'exclure les IRIS avec 0 logement.")
+      )
+      
+      iris_zero_logements <- df_reduced %>%
+        group_by(IRIS) %>%
+        summarise(has_zero_logements = any(nb_logements == 0, na.rm = TRUE), .groups = "drop") %>%
+        filter(has_zero_logements) %>%
+        pull(IRIS)
+      
+      n_iris_zero_removed <- length(unique(iris_zero_logements))
+      
+      iris_zero_detail <- df_reduced %>%
+        filter(IRIS %in% iris_zero_logements) %>%
+        distinct(IRIS, treated)
+      
+      n_iris_zero_removed_paris <- iris_zero_detail %>%
+        filter(treated == 1) %>%
+        distinct(IRIS) %>%
+        nrow()
+      
+      n_iris_zero_removed_control <- iris_zero_detail %>%
+        filter(treated == 0) %>%
+        distinct(IRIS) %>%
+        nrow()
+      
+      df_reduced <- df_reduced %>%
+        filter(!IRIS %in% iris_zero_logements)
+    }
+    
+    n_iris_after_zero_filter <- df_reduced %>% distinct(IRIS) %>% nrow()
+    n_iris_after_zero_filter_paris <- df_reduced %>% filter(treated == 1) %>% distinct(IRIS) %>% nrow()
+    n_iris_after_zero_filter_control <- df_reduced %>% filter(treated == 0) %>% distinct(IRIS) %>% nrow()
     
     validate(
       need(sum(df_reduced$treated == 1, na.rm = TRUE) > 0, "Aucune observation Paris trouvée."),
@@ -642,6 +689,15 @@ server <- function(input, output, session) {
     
     list(
       df_ebal = df_ebal,
+      n_iris_initial = n_iris_initial,
+      n_iris_initial_paris = n_iris_initial_paris,
+      n_iris_initial_control = n_iris_initial_control,
+      n_iris_zero_removed = n_iris_zero_removed,
+      n_iris_zero_removed_paris = n_iris_zero_removed_paris,
+      n_iris_zero_removed_control = n_iris_zero_removed_control,
+      n_iris_after_zero_filter = n_iris_after_zero_filter,
+      n_iris_after_zero_filter_paris = n_iris_after_zero_filter_paris,
+      n_iris_after_zero_filter_control = n_iris_after_zero_filter_control,
       balance_table = balance_table,
       ate = ate,
       n_iris_paris = n_iris_paris,
@@ -680,7 +736,26 @@ server <- function(input, output, session) {
     cat("Différence de traitement / outcome :", res$outcome_name, "\n")
     cat("Période de calage :", res$pre_y1, "->", res$pre_y2, "\n")
     cat("Période de traitement :", res$post_y1, "->", res$post_y2, "\n\n")
-    cat("Nombre d'observations dans la base d'analyse :", nrow(res$df_ebal), "\n")
+    cat("Nombre d'IRIS avant éventuelle exclusion 0 logement :", res$n_iris_initial, "
+")
+    cat("  - Paris :", res$n_iris_initial_paris, "
+")
+    cat("  - Contrôle :", res$n_iris_initial_control, "
+")
+    cat("Nombre d'IRIS retirés pour 0 logement :", res$n_iris_zero_removed, "
+")
+    cat("  - Paris :", res$n_iris_zero_removed_paris, "
+")
+    cat("  - Contrôle :", res$n_iris_zero_removed_control, "
+")
+    cat("Nombre d'IRIS après ce filtre :", res$n_iris_after_zero_filter, "
+")
+    cat("  - Paris :", res$n_iris_after_zero_filter_paris, "
+")
+    cat("  - Contrôle :", res$n_iris_after_zero_filter_control, "
+")
+    cat("Nombre d'observations dans la base d'analyse :", nrow(res$df_ebal), "
+")
     cat("Nombre d'IRIS Paris :", sum(res$df_ebal$treated == 1), "\n")
     cat("Nombre d'IRIS contrôle :", sum(res$df_ebal$treated == 0), "\n\n")
     cat("Variables additionnelles de calage :
