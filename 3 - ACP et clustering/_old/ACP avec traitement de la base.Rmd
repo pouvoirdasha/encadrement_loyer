@@ -57,8 +57,10 @@ df[, part_cadres := 100*nb_cadres/nb_actifs_occ]
 df[, part_prof_inter := 100*nb_professions_inter/nb_actifs_occ]
 df[, part_employes := 100*nb_employes/nb_actifs_occ]
 
+df[, densite := nb_personnes_menage/aire]
+
 df = df[, c("IRIS", "COM", "annee",
-            "nb_personnes_menage",
+            "nb_personnes_menage", "densite",
             "part_actifs_pop", "part_etudiants_pop",
             "part_chomeurs", "part_agriculteurs",
             "part_commercants", "part_cadres", 
@@ -78,6 +80,8 @@ df = df[nb_personnes_menage>0]
 
 ```{r, warning=FALSE}
 df_num <- df[annee==2017, .SD, .SDcols = is.numeric]
+
+df_num
   
 df_num = df_num[,-"annee"]
 
