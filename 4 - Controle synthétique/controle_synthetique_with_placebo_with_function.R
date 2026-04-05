@@ -1,8 +1,5 @@
 #### QUE FAIT CE SCRIPT #####
-# On réalise une ACP puis un clustering
-# que l'on utilise pour ensuite réaliser le controle synthétique
-
-# en effet, il y a trop d'observations sinon
+# données finales importées directement
 
 
 library(data.table)
@@ -12,151 +9,13 @@ library(Synth)
 
 
 
-data = fread("base_2006_2022.csv", encoding = "UTF-8")
+data = fread("base_2006_2022_aire_cluster-COM.csv", encoding = "UTF-8")
 
-# VARIABLES A CHANGER
-seuil_pop = 3000
-annee_ACP = 2015
-nb_clusters = 6
+data_synth = data
 
-# Préparation des données à l'échelle communale -----
-# on garde les communes de plus de 3 000 habitants
+data_synth[, densite := nb_personnes_menage/aire]
+data_synth[, cluster_com := cluster]
 
-df_com = data[, lapply(.SD, sum, na.rm = TRUE),
-              by = c("COM", "annee"), .SDcols = is.numeric]
-
-
-df_com = df_com[nb_personnes_menage> seuil_pop]
-
-df_com[, part_RP_1_2_pieces := 100*(nb_RP_1_piece + nb_RP_2_pieces)/nb_RP]
-df_com[, part_RP_en_loc := 100*nb_RP_en_loc/nb_RP]
-
-df_com[, part_RP := 100*nb_RP/nb_logements]
-df_com[, part_logements_vacants := 100*nb_logements_vacants/nb_logements]
-
-df_com[, part_RP_proprio := 100*nb_RP_proprio/nb_RP]
-
-df_com[, part_actifs_pop := 100*nb_actifs/nb_personnes_menage]
-df_com[, part_etudiants_pop := 100*nb_etudiants/nb_personnes_menage]
-
-df_com[, part_chomeurs := 100*nb_chomeurs/nb_actifs]
-
-df_com[, part_agriculteurs := 100*nb_agriculteurs/nb_actifs_occ]
-df_com[, part_commercants := 100*nb_commercants/nb_actifs_occ]
-df_com[, part_cadres := 100*nb_cadres/nb_actifs_occ]
-df_com[, part_prof_inter := 100*nb_professions_inter/nb_actifs_occ]
-df_com[, part_employes := 100*nb_employes/nb_actifs_occ]
-
-df_com = df_com[, c("COM", "annee",
-                    "nb_personnes_menage",
-                    "part_actifs_pop", "part_etudiants_pop",
-                    "part_chomeurs", "part_agriculteurs",
-                    "part_commercants", "part_cadres", 
-                    "part_prof_inter", "part_employes",
-                    "nb_logements", "part_RP_1_2_pieces",
-                    "part_RP_en_loc", "part_RP",
-                    "part_logements_vacants", "part_RP_proprio"
-)]
-
-# Réalisation de l'ACP SUR 2015 UNIQUEMENT -----
-df_com_num <- df_com[annee==annee_ACP, .SD, .SDcols = is.numeric]
-
-df_com_num = df_com_num[,-"annee"]
-
-res <- PCA(df_com_num,
-           scale.unit = TRUE,
-           graph = FALSE)
-
-res$eig
-
-# on récupère les nouvelles coordonnées
-ind_coords <- res$ind$coord
-
-# on ne prend que les 5 premières coordonnées
-ind_coords_sub <- ind_coords[, 1:5]  # sélection des axes 1 à 5
-
-fviz_nbclust(ind_coords_sub, kmeans, method = "silhouette")
-# on prend 6 clusters
-
-
-# CLUSTERING ------
-km <- kmeans(ind_coords_sub, centers = nb_clusters, nstart = 100)
-
-
-data_cluster_com = df_com[annee == annee_ACP]
-data_cluster_com$cluster_com <- km$cluster
-
-df_com_cluster = data_cluster_com[, c("COM", "cluster_com")]
-
-rm(data_cluster_com)
-rm(ind_coords)
-rm(ind_coords_sub)
-rm(km)
-rm(res)
-rm(df_com)
-
-# CONTROL SYNTHETIQUE -----
-# A - Préparation des données à l'échelle communale -----
-
-correspondance_COM = fread("correspondance_com.csv",
-                           sep = ";", encoding = "UTF-8")
-
-# Agrégation à l'échelle de la commune
-num_cols <- names(data)[sapply(data, is.numeric)]
-num_cols <- setdiff(num_cols, c("COM", "annee", "IRIS"))
-
-data <- data[, 
-             lapply(.SD, sum, na.rm = TRUE),
-             by = .(COM, annee),
-             .SDcols = num_cols
-]
-
-# Variables supplémentaires
-
-# Ratio locataires / résidences principales (part de location)
-data[, part_loc := nb_RP_en_loc / nb_RP]
-
-# Taux de vacance
-data[, taux_vacance := nb_logements_vacants / nb_logements]
-
-# Densité résidentielle (personnes par logement RP)
-data[, densite_RP := nb_personnes_en_RP / nb_RP]
-
-# Taux de chômage approché
-data[, taux_chomage := nb_chomeurs / (nb_actifs + 1)]
-
-# Part cadres parmi actifs occupés
-data[, part_cadres := nb_cadres / (nb_actifs_occ + 1)]
-
-# Log des variables pour réduire l'asymétrie
-data[, log_RP_loc    := log1p(nb_RP_en_loc)]
-data[, log_menages   := log1p(nb_menages)]
-data[, log_logements := log1p(nb_logements)]
-
-
-# On exclut les communes d'Île de France
-# pour éviter les effets de bord
-# de l'encadrement des loyers à Paris
-data_hors_IDF = data[
-  !(substr(COM, 1, 2) %in% c("77", "78", "91", 
-                             "92", "93", "94", "95"))
-]
-
-data_synth <- data[COM %in% data_hors_IDF$COM]
-
-# on fait la jointure avec les cluster
-
-data_synth = merge(data_synth,
-                   df_com_cluster,
-                   by = "COM")
-
-rm(data)
-rm(data_hors_IDF)
-rm(df_com_num)
-rm(df_com_cluster)
-
-# B- Réalisation du contrôle synthétique -----
-#source("fonctions_control_synthetique.R")
 
 # table de sauvgarde des résultats
 res <- data.table()
@@ -183,11 +42,12 @@ control_synth_liste <- function(liste_com,
                                   "nb_logements",
                                   "taux_vacance",
                                   "nb_residences_second_ou_occ",
-                                  "nb_RP_1_piece"
+                                  "nb_RP_1_piece",
+                                  "densite"
                                 ),
                                 annee_encadrement = 2019,
                                 variable_dependante = "nb_RP_en_loc",
-                                n_placebo = 50,          
+                                n_placebo = 100,          
                                 seed_placebo = 42        
 ) {
   

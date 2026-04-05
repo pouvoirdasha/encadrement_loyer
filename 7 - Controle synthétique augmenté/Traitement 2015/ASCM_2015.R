@@ -1,17 +1,17 @@
 library(data.table)
 library(augsynth)
 
-setwd("~/0 ENSAE/3A/S2/Projet_socio_eco/encadrement_loyer/7 - Controle synthétique augmenté")
-data = fread("../base_2006_2022_aire_cluster-COM.csv",
+setwd("~/0 ENSAE/3A/S2/Projet_socio_eco/encadrement_loyer/7 - Controle synthétique augmenté/Traitement 2015")
+data = fread("../../base_2006_2022_aire_cluster-COM.csv",
              sep = ";", dec = ",")
 
 
 annees = 2007:2022
-traites <- c(as.character(75101:75120), "59350")
+traites <- c(as.character(75101:75120))
 
 data = data[annee!= "2006"]
 
-correspondance_COM = fread("../correspondance_com.csv",
+correspondance_COM = fread("../../correspondance_com.csv",
                            sep = ";", encoding = "UTF-8")
 
 setnames(correspondance_COM, "Code géographique", "COM")
@@ -28,13 +28,13 @@ dt[, part_HLM      := nb_RP_HLM / nb_RP]
 dt[, part_cadres   := nb_cadres / nb_menages]
 dt[, densite := nb_personnes_menage/aire]
 dt[, treated       := as.integer(COM %in% traites)]
-dt[, post          := as.integer(annee >= 2019)]
+dt[, post          := as.integer(annee >= 2015)]
 dt[, treat_post    := treated * post]
 
 res_synth = data.table()
 
 
-for (commune in as.character(c(75101:75120, 59350))) {
+for (commune in as.character(c(75101:75120))) {
   
   dt_synth = dt[! COM %in% setdiff(traites, commune)]
   cluster_com = unique(dt[COM == commune, cluster])
@@ -82,9 +82,9 @@ for (commune in as.character(c(75101:75120, 59350))) {
   
   syn_classique_res = as.data.table(res$att)
   
-  syn_classique_res = syn_classique_res[Time > 2018]
+  syn_classique_res = syn_classique_res[Time > 2014]
   
-  nb_RP_loc = dt_synth[COM == commune & annee> 2018, c("annee", "nb_RP_en_loc")]
+  nb_RP_loc = dt_synth[COM == commune & annee> 2014, c("annee", "nb_RP_en_loc")]
   
   syn_classique_res_complet = merge(syn_classique_res,
                                     nb_RP_loc,
@@ -107,7 +107,7 @@ for (commune in as.character(c(75101:75120, 59350))) {
   
   syn_jack_res = as.data.table(res$att)
   
-  syn_jack_res = syn_jack_res[Time > 2018]
+  syn_jack_res = syn_jack_res[Time > 2014]
   
   syn_jack_res_complet = merge(syn_jack_res,
                                     nb_RP_loc,
@@ -165,9 +165,9 @@ for (commune in as.character(c(75101:75120, 59350))) {
   
   syn_ridge_res = as.data.table(res$att)
   
-  syn_ridge_res = syn_ridge_res[Time > 2018]
+  syn_ridge_res = syn_ridge_res[Time > 2014]
   
-  nb_RP_loc = dt_synth[COM == commune & annee> 2018, c("annee", "nb_RP_en_loc")]
+  nb_RP_loc = dt_synth[COM == commune & annee> 2014, c("annee", "nb_RP_en_loc")]
   
   syn_ridge_res_complet = merge(syn_ridge_res,
                                     nb_RP_loc,
@@ -189,7 +189,7 @@ for (commune in as.character(c(75101:75120, 59350))) {
   res_l2_imbalance = res$l2_imbalance
   res_l2_imbalance_scale = res$scaled_l2_imbalance
   
-  syn_jack_res = syn_jack_res[Time > 2018]
+  syn_jack_res = syn_jack_res[Time > 2014]
   
   syn_jack_res_complet = merge(syn_jack_res,
                                nb_RP_loc,
@@ -249,9 +249,9 @@ for (commune in as.character(c(75101:75120, 59350))) {
   res_l2_imbalance_scale = res$scaled_l2_imbalance
   syn_ridge_FE_res = as.data.table(res$att)
   
-  syn_ridge_FE_res = syn_ridge_FE_res[Time > 2018]
+  syn_ridge_FE_res = syn_ridge_FE_res[Time > 2014]
   
-  nb_RP_loc = dt_synth[COM == commune & annee> 2018, c("annee", "nb_RP_en_loc")]
+  nb_RP_loc = dt_synth[COM == commune & annee> 2014, c("annee", "nb_RP_en_loc")]
   
   syn_ridge_FE_res_complet = merge(syn_ridge_FE_res,
                                 nb_RP_loc,
@@ -274,7 +274,7 @@ for (commune in as.character(c(75101:75120, 59350))) {
   res_l2_imbalance_scale = res$scaled_l2_imbalance
   syn_jack_res = as.data.table(res$att)
   
-  syn_jack_res = syn_jack_res[Time > 2018]
+  syn_jack_res = syn_jack_res[Time > 2014]
   
   syn_jack_res_complet = merge(syn_jack_res,
                                nb_RP_loc,
@@ -335,9 +335,9 @@ for (commune in as.character(c(75101:75120, 59350))) {
   res_l2_imbalance_scale = res$scaled_l2_imbalance
   syn_ridge_cov_res = as.data.table(res$att)
   
-  syn_ridge_cov_res = syn_ridge_cov_res[Time > 2018]
+  syn_ridge_cov_res = syn_ridge_cov_res[Time > 2014]
   
-  nb_RP_loc = dt_synth[COM == commune & annee> 2018, c("annee", "nb_RP_en_loc")]
+  nb_RP_loc = dt_synth[COM == commune & annee> 2014, c("annee", "nb_RP_en_loc")]
   
   syn_ridge_cov_res_complet = merge(syn_ridge_cov_res,
                                    nb_RP_loc,
@@ -360,7 +360,7 @@ for (commune in as.character(c(75101:75120, 59350))) {
   res_l2_imbalance = res$l2_imbalance
   
 
-  syn_jack_res = syn_jack_res[Time > 2018]
+  syn_jack_res = syn_jack_res[Time > 2014]
   
   syn_jack_res_complet = merge(syn_jack_res,
                                nb_RP_loc,
@@ -380,4 +380,4 @@ for (commune in as.character(c(75101:75120, 59350))) {
 
 }
 
-fwrite(res_synth, "resultats_ATT.csv", sep = ";", dec = ",")
+fwrite(res_synth, "resultats_ATT_2015.csv", sep = ";", dec = ",")
