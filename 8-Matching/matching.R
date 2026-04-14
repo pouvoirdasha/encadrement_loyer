@@ -149,6 +149,7 @@ mapping_paires <- df_paires %>%
   mutate(diff_distance = abs(distance_trait - distance_ctrl)) %>%
   select(subclass, IRIS_trait, LIBCOM_trait, IRIS_ctrl, LIBCOM_ctrl, diff_distance)
 
+
 # 3. Export CSV
 write_csv(mapping_paires, "matching_paires.csv")
 
