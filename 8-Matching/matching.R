@@ -309,86 +309,9 @@ mapping_paires_both <- df_paires_both %>%
 
 
 # Export CSV des paires
-write_csv(mapping_paires_both, "matching_paires_2006-17_Paris_Lille.csv")
+write_csv(mapping_paires_both, "data/matching_paires_2006-17_Paris_Lille.csv")
+
+write_csv(df, "data/bdd_finale_mathching.csv")
 
 
 
-
-
-
-
-
-###### PLOTTING The data - et sauvegarde des plots pour chaque 
-# --- 5. Préparation complète de df_long_plot ---
-df_long_plot <- df %>%
-  filter(IRIS %in% iris_retenus) %>%
-  mutate(
-    # Variable cible
-    part_loc       = nb_RP_en_loc / (nb_RP + 1),
-    
-    # Variables de structure (doivent correspondre à vars_matching)
-    taux_vacance   = nb_logements_vacants / (nb_logements + 1),
-    part_cadres    = nb_cadres / (nb_actifs_occ + 1),
-    log_logements  = log1p(nb_logements),
-    densite_pop    = nb_personnes_en_RP / (aire + 0.001),
-    part_hlm       = nb_RP_HLM / (nb_RP + 1),
-    part_etudiants = nb_etudiants / (nb_personnes_en_RP + 1),
-    part_ouvriers  = nb_ouvriers / (nb_actifs_occ + 1),
-    part_1p        = nb_RP_1_piece / (nb_RP + 1),
-    part_2p        = nb_RP_2_pieces / (nb_RP + 1),
-    part_3p        = nb_RP_3_pieces / (nb_RP + 1),
-    
-    # Label de groupe
-    Groupe = if_else(traitement == 1, "Traitement (Paris/Lille)", "Contrôle Matché")
-  )
-
-# --- 6. Plots des variables de contrôle ---
-
-# On s'assure que vars_matching est bien défini
-vars_matching <- c("taux_vacance", "taux_chomage", "densite_pop", "part_cadres", "part_ouvriers", 
-                   "part_etudiants", "part_hlm", "part_1p", "part_2p", "part_3p", "log_logements")
-
-# Variables qu'on souhaite spécifiquement afficher sur le graph
-vars_to_plot <- c("densite_pop", "part_hlm", "part_cadres", "taux_vacance")
-
-df_plot_ctrl <- df_long_plot %>%
-  filter(annee %in% c(2007, 2012, 2017)) %>%
-  group_by(annee, Groupe) %>%
-  summarise(across(all_of(vars_matching), mean, na.rm = TRUE), .groups = "drop") %>%
-  pivot_longer(cols = all_of(vars_matching), names_to = "Variable", values_to = "Valeur")
-
-ggplot(df_plot_ctrl %>% filter(Variable %in% vars_to_plot), 
-       aes(x = annee, y = Valeur, color = Groupe, group = Groupe)) +
-  geom_line(linewidth = 1) + 
-  geom_point() +
-  facet_wrap(~ Variable, scales = "free_y") +
-  scale_x_continuous(breaks = c(2007, 2012, 2017)) +
-  labs(title = "Qualité du matching : Évolution des covariables",
-       subtitle = "Moyennes par groupe pour les années de matching",
-       x = "Année", y = "Valeur Moyenne") +
-  theme_minimal() +
-  theme(legend.position = "bottom")
-
-# --- 7. Plots de la variable TARGET (Validation visuelle des tendances parallèles) ---
-
-plot_target <- function(data, start_yr, end_yr) {
-  data %>%
-    filter(annee >= start_yr, annee <= end_yr) %>%
-    group_by(annee, Groupe) %>%
-    summarise(m_part_loc = mean(part_loc, na.rm = TRUE), .groups = "drop") %>%
-    ggplot(aes(x = annee, y = m_part_loc, color = Groupe, group = Groupe)) +
-    geom_line(linewidth = 1.2) +
-    geom_point() +
-    labs(title = paste("Vérification : Part des locataires (", start_yr, "-", end_yr, ")"),
-         subtitle = "Si les courbes sont parallèles avant traitement, le matching est bon",
-         y = "Moyenne Part Locataires", x = "Année") +
-    theme_minimal() +
-    theme(legend.position = "bottom")
-}
-
-# Affichage
-p1 <- plot_target(df_long_plot, 2007, 2017)
-p2 <- plot_target(df_long_plot, 2012, 2022)
-
-print(p1)
-print(p2)
