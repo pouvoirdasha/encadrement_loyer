@@ -31,6 +31,7 @@ dt[, treated       := as.integer(COM %in% traites)]
 dt[, post          := as.integer(annee >= 2019)]
 dt[, treat_post    := treated * post]
 
+
 res_synth = data.table()
 
 

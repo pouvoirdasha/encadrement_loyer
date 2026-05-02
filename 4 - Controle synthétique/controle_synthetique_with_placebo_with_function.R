@@ -1,5 +1,4 @@
-#### QUE FAIT CE SCRIPT #####
-# données finales importées directement
+#avec les données finales importées directement
 
 
 library(data.table)
@@ -22,6 +21,9 @@ res <- data.table()
 sauv_pourcenge <- data.table(
   arrondissement   = character(),
   effet            = numeric(),
+  stock_log_loc_2022 = numeric(),
+  effet            = numeric(),
+  effet_num_post = numeric(),
   RMSPE_pre        = numeric(),
   RMSPE_post       = numeric(),
   ratio            = numeric(),
@@ -47,7 +49,7 @@ control_synth_liste <- function(liste_com,
                                 ),
                                 annee_encadrement = 2019,
                                 variable_dependante = "nb_RP_en_loc",
-                                n_placebo = 100,          
+                                n_placebo = 150,          
                                 seed_placebo = 42        
 ) {
   
@@ -179,9 +181,10 @@ control_synth_liste <- function(liste_com,
     
     # ATT et RMSPE ville traitée
     att_4_ans  <- res_traite$gap[annees_all == 2022]
-    effet_num  <- round(100 * att_4_ans /
-                          data_hors_encad[COM == com & annee == 2022,
-                                          get(variable_dependante)], 1)
+    stock_log_loc_2022 = data_hors_encad[COM == com & annee == 2022,
+                                         get(variable_dependante)]
+    effet_num  <- round(100 * att_4_ans /stock_log_loc_2022, 1)
+    effet_num_post <- 1 - round(100 * stock_log_loc_2022 / (stock_log_loc_2022+att_4_ans))
     
     cat("ATT à 4 ans :", att_4_ans, "(", effet_num, "% du parc)\n")
     cat("Ratio RMSPE traité :", res_traite$ratio, "\n")
@@ -235,7 +238,7 @@ control_synth_liste <- function(liste_com,
     
     p_val_perm <- if (n_valides > 0) {
       # proportion de placebos avec un ratio >= ratio traité
-      mean(ratios_placebo >= ratio_traite)
+      mean((ratios_placebo+1) >= (ratio_traite+1))
     } else {
       NA_real_
     }
@@ -252,14 +255,17 @@ control_synth_liste <- function(liste_com,
     # --- Sauvegarde des résultats -------------------------------------------
     sauv_pourcenge <- rbind(sauv_pourcenge, data.table(
       arrondissement   = nom_graph,
+      att_4_ans = att_4_ans,
+      stock_log_loc_2022 = stock_log_loc_2022,
       effet            = effet_num,
+      effet_num_post = effet_num_post,
       RMSPE_pre        = res_traite$rmspe_pre,
       RMSPE_post       = res_traite$rmspe_post,
       ratio            = ratio_traite,
       n_placebo_valide = n_valides,
       p_val_perm       = p_val_perm,
       rang_placebo     = rang_traite
-    ))
+    ), fill = TRUE)
     
     # --- Graphique du test de permutation -----------------------------------
     jpeg(
