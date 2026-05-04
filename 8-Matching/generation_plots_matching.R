@@ -56,7 +56,11 @@ VAR_LABELS <- c(
   log_logements  = "Log(nombre de logements)",
   nb_RP_en_loc   = "Nombre de résidences principales en location"
 )
-
+ 
+# -----------------------------------------------------------------------------
+# 2. FONCTIONS UTILITAIRES
+# -----------------------------------------------------------------------------
+ 
 #' Créer les dossiers de sortie s'ils n'existent pas
 create_output_dirs <- function(dirs) {
   walk(dirs, ~ dir.create(.x, recursive = TRUE, showWarnings = FALSE))
@@ -72,61 +76,97 @@ load_paires <- function(path) {
 }
  
 #' Préparer le panel long pour un jeu de paires donné
-#' @param paires   data.frame avec IRIS_trait / IRIS_ctrl
-#' @param bdd      data.frame base de données complète
-#' @param annees   vecteur d'années à conserver
+#'
+#' Correction matching multi-villes :
+#'   - Un IRIS controle peut etre matche a plusieurs traites (with replacement)
+#'     → on déduplique proprement AVANT de tagger les groupes
+#'   - Un IRIS present dans les deux colonnes (chevauchement) est classe Traite
+#'     (priorité au groupe de traitement)
+#'   - On diagnostique le chevauchement et le taux de reutilisation des controles
+#'
+#' @param paires    data.frame avec IRIS_trait / IRIS_ctrl
+#' @param bdd       data.frame base de données complète
+#' @param annees    vecteur d'années à conserver
 #' @param seuil_pop seuil de population (filtrage commune)
-prepare_panel <- function(paires, bdd, annees = ANNEES_PRE_TRAIT,
-                           seuil_pop = SEUIL_POP) {
+prepare_panel <- function(paires, bdd, annees = ANNEES_PRE_TRAIT) {
  
-  # IRIS traités et contrôles uniques
-  iris_trait <- unique(paires$IRIS_trait)
-  iris_ctrl  <- unique(paires$IRIS_ctrl)
-  iris_all   <- union(iris_trait, iris_ctrl)
+  # --- 1. Diagnostics sur les paires ----------------------------------------
+  # Forcer les deux colonnes en character pour eviter les faux positifs
+  # lors de intersect/setdiff dus a un mismatch de types (ex: dbl vs chr)
+  iris_trait_all <- as.character(paires$IRIS_trait)
+  iris_ctrl_all  <- as.character(paires$IRIS_ctrl)
  
+  iris_trait <- unique(iris_trait_all)
+  iris_ctrl  <- unique(iris_ctrl_all)
+ 
+  # IRIS controles reutilises (matching with replacement)
+  freq_ctrl <- table(iris_ctrl_all)
+  n_reutilises <- sum(freq_ctrl > 1)
+  if (n_reutilises > 0) {
+    message(glue("  ℹ {n_reutilises} IRIS controles reutilises (matching with replacement) ",
+                 "sur {length(iris_ctrl)} controles uniques"))
+    message(glue("  ℹ Reutilisation max : {max(freq_ctrl)} fois pour un meme controle"))
+  }
+ 
+  iris_all <- union(iris_trait, iris_ctrl)
+ 
+  message(glue("  → IRIS traites uniques  : {length(iris_trait)}"))
+  message(glue("  → IRIS controles uniques (apres nettoyage) : {length(iris_ctrl)}"))
+  message(glue("  → IRIS total dans le panel : {length(iris_all)}"))
+ 
+  # --- 2. Construction du panel ---------------------------------------------
+  # Meme cast sur la BDD pour que le %in% compare bien chr vs chr
   panel <- bdd %>%
-    filter(IRIS %in% iris_all,
-           annee %in% annees) %>%
+    mutate(IRIS = as.character(IRIS)) %>%
+    filter(IRIS %in% iris_all, annee %in% annees) %>%
     mutate(
+      # Priorité Traité > Contrôle en cas de chevauchement résiduel
       Groupe = case_when(
-        IRIS %in% iris_trait ~ "Traité",
-        IRIS %in% iris_ctrl  ~ "Contrôle",
+        IRIS %in% iris_trait ~ "Traite",
+        IRIS %in% iris_ctrl  ~ "Controle",
         TRUE                  ~ NA_character_
       )
     ) %>%
-    filter(!is.na(Groupe))
+    filter(!is.na(Groupe)) %>%
+    # Facteur ordonné pour que la légende soit toujours T avant C
+    mutate(Groupe = factor(Groupe, levels = c("Traite", "Controle"),
+                           labels = c("Traité", "Contrôle")))
  
-  # Filtrage par population (si variable disponible)
-  if ("pop_totale" %in% names(panel)) {
-    # Calcul de la population moyenne par IRIS sur la période
-    pop_moy <- panel %>%
-      group_by(IRIS) %>%
-      summarise(pop_moy = mean(pop_totale, na.rm = TRUE), .groups = "drop")
- 
-    iris_keep <- pop_moy %>%
-      filter(pop_moy >= seuil_pop) %>%
-      pull(IRIS)
- 
-    panel <- panel %>% filter(IRIS %in% iris_keep)
-    message(glue("  → Après filtrage population >= {seuil_pop} hab : {n_distinct(panel$IRIS)} IRIS"))
-  } else {
-    message("  ⚠ Variable 'pop_totale' absente – filtrage population ignoré.")
-  }
+  # --- 3. Diagnostic couverture annuelle ------------------------------------
+  # Le filtrage population est fait en amont (bdd_finale_matching).
+  # On affiche juste la couverture pour détecter les années avec IRIS manquants.
+  couv <- panel %>%
+    group_by(annee, Groupe) %>%
+    summarise(n_iris = n_distinct(IRIS), .groups = "drop") %>%
+    pivot_wider(names_from = Groupe, values_from = n_iris, values_fill = 0)
+  message("  → Couverture IRIS par annee et groupe :")
+  print(as.data.frame(couv))
  
   panel
 }
  
-#' Agréger par groupe × année (moyenne ± SE)
+#' Agréger par groupe x annee (moyenne +/- SE)
+#'
+#' Comportement vis-a-vis des IRIS manquants :
+#'   - La moyenne est calculee sur les IRIS PRESENTS cette annee-la uniquement
+#'     (na.rm = TRUE gere les NA de la variable, pas les IRIS absents)
+#'   - La colonne n_iris compte les IRIS distincts contribuant a la moyenne
+#'     cette annee, ce qui permet de detecter une composition changeante
+#'   - n_obs = nb de lignes (peut etre > n_iris si plusieurs logements/IRIS)
+#'
 #' @param panel data.frame long avec colonnes Groupe, annee, + vars
-#' @param var   nom de la variable à agréger
+#' @param var   nom de la variable a agreger
 aggregate_group <- function(panel, var) {
+  # Pas de filter(!is.na()) ici : on garde toutes les lignes IRIS x annee.
+  # na.rm = TRUE dans mean() et sd() ignore les NA variable par variable
+  # sans supprimer l'IRIS pour les autres variables ou les autres annees.
   panel %>%
-    filter(!is.na(.data[[var]])) %>%
     group_by(Groupe, annee) %>%
     summarise(
       moyenne = mean(.data[[var]], na.rm = TRUE),
-      se      = sd(.data[[var]],  na.rm = TRUE) / sqrt(n()),
-      n       = n(),
+      se      = sd(.data[[var]],  na.rm = TRUE) / sqrt(sum(!is.na(.data[[var]]))),
+      n_obs   = sum(!is.na(.data[[var]])),   # N effectif pour cette variable cette annee
+      n_iris  = n_distinct(IRIS),            # N IRIS presents cette annee (toutes vars)
       .groups = "drop"
     )
 }
@@ -168,8 +208,13 @@ plot_tendances <- function(df_agg, var,
       title    = titre,
       x        = "Année",
       y        = y_label,
-      caption  = glue("N Traités = {df_agg %>% filter(Groupe=='Traité') %>% pull(n) %>% mean() %>% round()},  ",
-                      "N Contrôles = {df_agg %>% filter(Groupe=='Contrôle') %>% pull(n) %>% mean() %>% round()}")
+      caption  = {
+      nt_rng <- df_agg %>% filter(Groupe == "Traité")   %>% pull(n_iris) %>% range()
+      nc_rng <- df_agg %>% filter(Groupe == "Contrôle") %>% pull(n_iris) %>% range()
+      glue("IRIS Traités : {nt_rng[1]}–{nt_rng[2]} selon l'année  |  ",
+           "IRIS Contrôles : {nc_rng[1]}–{nc_rng[2]} selon l'année  ",
+           "(variation = IRIS changeant de contour ou données manquantes)")
+    }
     ) +
     theme_minimal(base_size = 12) +
     theme(
@@ -234,24 +279,7 @@ export_all_plots <- function(paires, bdd, output_dir, label,
  
   message(glue("  → Tous les graphiques exportés dans {output_dir}\n"))
 }
-message("Chargement de la base de données principale…")
-bdd <- read_csv(PATH_BDD, show_col_types = FALSE)
-message(glue("  → {nrow(bdd)} lignes, {ncol(bdd)} colonnes"))
-message(glue("  → Colonnes : {paste(names(bdd), collapse=', ')}"))
- 
-# Vérification colonne 'annee'
-if (!"annee" %in% names(bdd)) {
-  # Tentative de renommage depuis 'year' ou 'ANNEE'
-  bdd <- bdd %>% rename(any_of(c(annee = "year", annee = "ANNEE", annee = "Year")))
-  if (!"annee" %in% names(bdd))
-    stop("❌ Colonne 'annee' (ou 'year'/'ANNEE') introuvable dans la BDD.")
-}
- 
-# Vérification colonne 'Traitement'
-if (!"Traitement" %in% names(bdd) && "traitement" %in% tolower(names(bdd))) {
-  bdd <- bdd %>% rename(Traitement = matches("(?i)^traitement$", perl = TRUE))
-}
- 
+
 # -----------------------------------------------------------------------------
 # 4. CHARGEMENT DES PAIRES
 # -----------------------------------------------------------------------------
@@ -262,7 +290,7 @@ message("\nChargement des fichiers de paires…")
 paires_pl_full <- tryCatch(
   load_paires(PATH_PAIRES_PARIS_LILLE_FULL),
   error = function(e) {
-    message(glue("  ⚠ Fichier Paris-Lille full non trouvé ({PATH_PAIRES_PARIS_LILLE_FULL})."))
+    message(glue(" Fichier Paris-Lille full non trouvé ({PATH_PAIRES_PARIS_LILLE_FULL})."))
     NULL
   }
 )
@@ -271,7 +299,7 @@ paires_pl_full <- tryCatch(
 paires_pl_3yrs <- tryCatch(
   load_paires(PATH_PAIRES_PARIS_LILLE_3YRS),
   error = function(e) {
-    message(glue("  ⚠ Fichier Paris-Lille 3 ans non trouvé ({PATH_PAIRES_PARIS_LILLE_3YRS})."))
+    message(glue("Fichier Paris-Lille 3 ans non trouvé ({PATH_PAIRES_PARIS_LILLE_3YRS})."))
     NULL
   }
 )
@@ -280,11 +308,12 @@ paires_pl_3yrs <- tryCatch(
 paires_paris_full <- tryCatch(
   load_paires(PATH_PAIRES_PARIS_FULL),
   error = function(e) {
-    message(glue("  ⚠ Fichier Paris full non trouvé ({PATH_PAIRES_PARIS_FULL})."))
+    message(glue("Fichier Paris full non trouvé ({PATH_PAIRES_PARIS_FULL})."))
     NULL
   }
 )
- 
+
+
 # -----------------------------------------------------------------------------
 # 5. CRÉATION DES DOSSIERS DE SORTIE
 # -----------------------------------------------------------------------------
@@ -328,3 +357,40 @@ if (!is.null(paires_paris_full)) {
   )
 }
  
+# Par ville pour voir : 
+
+filter_paires_ville <- function(paires, ville) {
+  prefix <- switch(str_to_lower(ville),
+    "paris" = "75",
+    "lille" = "59",
+    stop(paste("Ville inconnue :", ville))
+  )
+  paires %>%
+    filter(str_starts(as.character(IRIS_trait), prefix))
+}
+
+# ---- 6b. Paris & Lille – 3 années (existant) --------------------------------
+modeles_pl_3yrs <- run_and_export(paires_pl_3yrs, "Paris_Lille_2007_2012_2017")
+
+# ---- 6b-bis. Paris seul (filtré depuis les mêmes paires) -------------------
+run_and_export(
+  filter_paires_ville(paires_pl_3yrs, "paris"),
+  "Paris_seul_2007_2012_2017"
+)
+
+# ---- 6b-ter. Lille seule ---------------------------------------------------
+run_and_export(
+  filter_paires_ville(paires_pl_3yrs, "lille"),
+  "Lille_seule_2007_2012_2017"
+)
+
+run_and_export(
+  filter_paires_ville(paires_pl_full, "paris"),
+  "Paris_seul_2006-17"
+)
+
+# ---- 6b-ter. Lille seule ---------------------------------------------------
+run_and_export(
+  filter_paires_ville(paires_pl_full, "lille"),
+  "Lille_seule_2006-17"
+)

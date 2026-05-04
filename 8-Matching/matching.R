@@ -83,7 +83,7 @@ excl_lille <- c("59328", "59356", "59457", "59470", "59128", "59196", "59195",
 # Nettoyage du dataset original
 df <- df %>%
   # Exclure la petite couronne (92, 93, 94)
-  filter(!str_starts(DEPCOM, "92|93|94")) %>%
+  filter(!substr(DEPCOM, 1, 2) %in% c("92", "93", "94")) %>%
   # Exclure les communes limitrophes de Lille
   filter(!DEPCOM %in% excl_lille)
 

@@ -187,23 +187,23 @@ prepare_did <- function(paires, bdd, annees = ANNEES_DID,
 #'
 #' @return liste nommée de modèles fixest
 run_did <- function(panel, label) {
-
+ 
   message(glue("\n  --- Régressions : {label} ---"))
   message(glue("  N obs = {nrow(panel)} | N IRIS = {n_distinct(panel$IRIS)}"))
   message(glue("  Traités : {sum(panel$G_i == 1 & panel$T_t == 0)} obs pré, ",
                "{sum(panel$G_i == 1 & panel$T_t == 1)} obs post"))
   message(glue("  Contrôles : {sum(panel$G_i == 0 & panel$T_t == 0)} obs pré, ",
                "{sum(panel$G_i == 0 & panel$T_t == 1)} obs post"))
-
+ 
   # Variables de contrôle disponibles
   ctrl <- intersect(VARS_CONTROLE, names(panel))
   ctrl_formula <- if (length(ctrl) > 0) paste(ctrl, collapse = " + ") else "1"
-
+ 
   # Vérification variable dépendante
   if (!VAR_DEP %in% names(panel)) {
     stop(glue("❌ Variable dépendante '{VAR_DEP}' absente du panel."))
   }
-
+ 
   # --------------------------------------------------------------------------
   # Spécification (1) : OLS naïf – G_i + T_t + G_i:T_t + contrôles
   #   SE clusterisées par commune
@@ -211,11 +211,11 @@ run_did <- function(panel, label) {
   f1 <- as.formula(glue(
     "{VAR_DEP} ~ G_i * T_t + {ctrl_formula}"
   ))
-
+ 
   m1 <- feols(f1, data = panel,
               cluster = ~commune,
               notes   = FALSE)
-
+ 
   # --------------------------------------------------------------------------
   # Spécification (2) : OLS + effets fixes commune
   #   G_i absorbé par EF commune si commune = unité d'analyse,
@@ -224,11 +224,11 @@ run_did <- function(panel, label) {
   f2 <- as.formula(glue(
     "{VAR_DEP} ~ G_i * T_t + {ctrl_formula} | commune"
   ))
-
+ 
   m2 <- feols(f2, data = panel,
               cluster = ~commune,
               notes   = FALSE)
-
+ 
   # --------------------------------------------------------------------------
   # Spécification (3) : TWFE — EF IRIS + EF commune
   #   G_i est absorbé (time-invariant within-IRIS).
@@ -238,11 +238,89 @@ run_did <- function(panel, label) {
   f3 <- as.formula(glue(
     "{VAR_DEP} ~ G_i:T_t + T_t + {ctrl_formula} | IRIS + commune"
   ))
-
+ 
   m3 <- feols(f3, data = panel,
               cluster = ~commune,
               notes   = FALSE)
-
+ 
+ 
+  # --------------------------------------------------------------------------
+  # Affichage console : sortie brute proprement labellee
+  # --------------------------------------------------------------------------
+  .print_model <- function(m, spec_label, matching_label) {
+    sep <- strrep("-", 65)
+    cat("\n", strrep("=", 65), "\n", sep = "")
+    cat(paste0(" MATCHING : ", matching_label, "\n"))
+    cat(paste0(" SPEC     : ", spec_label, "\n"))
+    cat(paste0(" DEP. VAR : ", VAR_DEP, "  |  Periode : ", ANNEE_PRE, "-", ANNEE_POST, "\n"))
+    cat(strrep("=", 65), "\n\n", sep = "")
+ 
+    # Tableau des coefficients avec t-stat et p-value
+    cf  <- coef(m)
+    se  <- se(m)
+    tst <- tstat(m)
+    pv  <- pvalue(m)
+    ci  <- confint(m)
+    sig <- ifelse(pv < 0.01, "***",
+           ifelse(pv < 0.05, "**",
+           ifelse(pv < 0.10, "*", "")))
+ 
+    coef_table <- data.frame(
+      Coefficient  = names(cf),
+      Estimate     = round(cf,  4),
+      Std.Error    = round(se,  4),
+      t.value      = round(tst, 3),
+      p.value      = formatC(pv, format = "g", digits = 3),
+      CI.2.5pct    = round(ci[, 1], 4),
+      CI.97.5pct   = round(ci[, 2], 4),
+      Sig          = sig,
+      check.names  = FALSE,
+      stringsAsFactors = FALSE
+    )
+ 
+    # Renommer les coefficients pour la lisibilite
+    coef_table$Coefficient <- ifelse(
+      coef_table$Coefficient %in% names(COEF_LABELS),
+      COEF_LABELS[coef_table$Coefficient],
+      coef_table$Coefficient
+    )
+ 
+    print(coef_table, row.names = FALSE)
+    cat("\nSignif. codes: 0 '***' 0.01 '**' 0.05 '*' 0.10 '' 1\n")
+    cat("SE clusterisees au niveau commune.\n\n")
+ 
+    # Goodness-of-fit
+    cat(sep, "\n")
+    cat(paste0("  R2                    : ", round(r2(m, type = "r2"),   4), "\n"))
+    cat(paste0("  R2 ajuste             : ", round(r2(m, type = "ar2"),  4), "\n"))
+    cat(paste0("  R2 within             : ", round(r2(m, type = "wr2"),  4), "\n"))
+    cat(paste0("  R2 within ajuste      : ", round(r2(m, type = "war2"), 4), "\n"))
+ 
+    tryCatch({
+      fst <- fitstat(m, "f")$f
+      cat(paste0("  F-stat (Wald)         : ", round(fst$stat, 3),
+                 "  (df1=", fst$df1, ", df2=", fst$df2, ")",
+                 "  p = ", formatC(fst$p, format = "g", digits = 3), "\n"))
+    }, error = function(e) {
+      cat("  F-stat                : non disponible pour cette specification\n")
+    })
+ 
+    cat(paste0("  RMSE                  : ", round(sqrt(mean(residuals(m)^2)), 4), "\n"))
+    cat(paste0("  N observations        : ", nobs(m), "\n"))
+ 
+    fe_names <- names(m$fixef_sizes)
+    if (length(fe_names) > 0) {
+      for (fe in fe_names) {
+        cat(paste0("  Nb niveaux EF [", fe, "] : ", m$fixef_sizes[[fe]], "\n"))
+      }
+    }
+    cat(sep, "\n\n")
+  }
+ 
+  .print_model(m1, "(1) OLS naif",                    label)
+  .print_model(m2, "(2) OLS + EF Commune",             label)
+  .print_model(m3, "(3) TWFE (EF IRIS + EF Commune)",  label)
+ 
   list(
     "(1) OLS"              = m1,
     "(2) EF Commune"       = m2,
@@ -501,82 +579,3 @@ modeles_paris_full <- run_and_export(
   paires_paris_full,
   "Paris_2006_2017"
 )
-
-# -----------------------------------------------------------------------------
-# 7. TABLEAU COMPARATIF TOUS MATCHINGS
-# -----------------------------------------------------------------------------
-
-message("\n", strrep("=", 65))
-message("  TABLEAU COMPARATIF TOUS MATCHINGS")
-message(strrep("=", 65))
-
-# Récupérer uniquement les spécifications TWFE (3) de chaque matching
-modeles_twfe <- list()
-if (!is.null(modeles_pl_full))   modeles_twfe[["PL Full – TWFE"]]   <- modeles_pl_full[["(3) TWFE IRIS+Commune"]]
-if (!is.null(modeles_pl_3yrs))   modeles_twfe[["PL 3ans – TWFE"]]   <- modeles_pl_3yrs[["(3) TWFE IRIS+Commune"]]
-if (!is.null(modeles_paris_full)) modeles_twfe[["Paris – TWFE"]]    <- modeles_paris_full[["(3) TWFE IRIS+Commune"]]
-
-if (length(modeles_twfe) > 0) {
-
-  # Table LaTeX comparative
-  latex_comp <- modelsummary(
-    modeles_twfe,
-    coef_rename  = COEF_LABELS,
-    coef_omit    = "Intercept",
-    statistic    = "({std.error})",
-    stars        = c("*" = 0.1, "**" = 0.05, "***" = 0.01),
-    gof_map      = c("nobs", "r.squared", "adj.r.squared",
-                     "rmse", "FE: IRIS", "FE: commune"),
-    title        = "Comparaison des estimateurs TWFE par type de matching",
-    notes        = list(
-      "Erreurs-types clusterisées au niveau commune entre parenthèses.",
-      "* p<0,10 ; ** p<0,05 ; *** p<0,01",
-      glue("Variable dépendante : {VAR_DEP}. Période : {ANNEE_PRE}–{ANNEE_POST}.")
-    ),
-    output = "latex_tabular"
-  )
-
-  comp_latex_path <- file.path(DIR_REG, "table_comparative_TWFE.tex")
-  writeLines(paste(as.character(latex_table), collapse = "\n"), path)
-  message(glue("  ✓ Table comparative LaTeX : {comp_latex_path}"))
-
-  html_comp <- modelsummary(
-    modeles_twfe,
-    coef_rename  = COEF_LABELS,
-    coef_omit    = "Intercept",
-    statistic    = "({std.error})",
-    stars        = c("*" = 0.1, "**" = 0.05, "***" = 0.01),
-    gof_map      = c("nobs", "r.squared", "adj.r.squared",
-                     "rmse", "FE: IRIS", "FE: commune"),
-    title        = "Comparaison des estimateurs TWFE par type de matching",
-    output       = "html"
-  )
-
-  comp_html_path <- file.path(DIR_REG, "table_comparative_TWFE.html")
-  writeLines(html_comp, comp_html_path)
-  message(glue("  ✓ Table comparative HTML  : {comp_html_path}"))
-}
-
-# -----------------------------------------------------------------------------
-# 8. COEFFICIENT PLOT GLOBAL
-# -----------------------------------------------------------------------------
-
-message("\n", strrep("=", 65))
-message("  COEFFICIENT PLOT GLOBAL")
-message(strrep("=", 65))
-
-if (length(all_coefs) > 0) {
-  all_coefs_df <- bind_rows(all_coefs)
-  plot_coef(all_coefs_df, DIR_REG)
-} else {
-  message("  ⚠ Aucun résultat agrégé – coefficient plot ignoré.")
-}
-
-# -----------------------------------------------------------------------------
-# 9. FIN
-# -----------------------------------------------------------------------------
-
-message("\n", strrep("=", 65))
-message("  ✅ Toutes les régressions terminées.")
-message(glue("  → Sorties dans : {DIR_REG}"))
-message(strrep("=", 65))
