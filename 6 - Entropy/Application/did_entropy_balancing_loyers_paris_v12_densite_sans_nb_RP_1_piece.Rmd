@@ -40,22 +40,27 @@ Ce document teste deux configurations pour estimer l'effet de l'encadrement des 
 
 L'outcome par défaut est donc : `r params$outcome_var`.
 
-Les deux configurations utilisent le même entropy balancing : le groupe contrôle est pondéré pour être comparable aux IRIS parisiens sur les variables suivantes, mesurées en niveau à l'année `r params$ebal_level_year` :
+Les deux configurations utilisent le même entropy balancing : le groupe contrôle est pondéré pour être comparable aux IRIS parisiens sur les variables suivantes, mesurées en niveau à l'année `r params$ebal_level_year`. Dans cette version, `nb_actifs` et `nb_RP_1_piece` sont volontairement retirées du calage et des contrôles de régression. On remplace aussi `aire` par une variable de densité des ménages, calculée comme `nb_menages / aire`. Les variables de niveau sont donc :
 
 - `nb_menages`
 - `nb_logements`
-- `nb_RP_1_piece`
-- `nb_actifs`
-- `aire`
+- `densite_menages`
 
-Les deux configurations calent aussi sur la différence pré-traitement de `nb_logements` entre `r params$pre_y1` et `r params$pre_y2`.
+Pour renforcer l'hypothèse de tendances parallèles, l'entropy balancing cale aussi sur deux différences pré-traitement entre `r params$pre_y1` et `r params$pre_y2` :
+
+- la **différence pré-traitement de l'outcome** `nb_RP_en_loc`, qui sert directement à rapprocher les tendances pré-traitement de la variable d'intérêt ;
+- la **différence pré-traitement de `nb_logements`**, qui contrôle la dynamique générale du parc de logements avant traitement.
+
+Autrement dit, le contrôle pondéré est forcé à ressembler à Paris non seulement en niveau, mais aussi sur la trajectoire pré-traitement de l'offre locative et du stock total de logements.
 
 La différence entre les deux configurations porte uniquement sur la régression DiD finale :
 
-- **Configuration 1** : la régression contrôle pour les cinq variables en niveau et pour la différence pré-traitement de `nb_logements`.
-- **Configuration 2** : la régression contrôle pour les cinq variables en niveau, mais **pas** pour la différence pré-traitement de `nb_logements`.
+- **Configuration 1** : la régression contrôle pour les variables en niveau, dont `densite_menages`, et pour la variation **post-traitement** de `nb_logements` entre `r params$post_y1` et `r params$post_y2`.
+- **Configuration 2** : la régression contrôle pour les mêmes variables en niveau, dont `densite_menages`, mais **pas** pour la variation post-traitement de `nb_logements`.
 
-Ainsi, `nb_logements` est utilisé comme variable de calage/contrôle, mais **pas comme outcome**. L'outcome reste `nb_RP_en_loc`.
+Important : `d_nb_logements_2012_2017` est utilisée dans l'entropy balancing dans les deux configurations pour équilibrer la dynamique pré-traitement du parc total de logements. En revanche, la différence entre Config. 1 et Config. 2 est l'inclusion ou non de `d_nb_logements_2017_2022` comme contrôle supplémentaire dans la régression DiD.
+
+Ainsi, la seule différence entre Config. 1 et Config. 2 est bien l'inclusion ou non de la variation **post-traitement** de `nb_logements` dans la régression DiD finale. Le calage sur les pré-tendances de `nb_RP_en_loc` et de `nb_logements` est commun aux deux configurations.
 
 Ce document ajoute aussi une section de **robustesse de l'inférence statistique**, les **résultats complets des régressions**, et des graphiques comparant les **poids EB originaux** aux **poids capés**. L'objectif est de ne pas dépendre uniquement de la p-value naïve de `summary(lm)`, qui peut être trop optimiste lorsque l'unité d'observation est l'IRIS mais que le traitement concerne Paris dans son ensemble.
 
@@ -112,17 +117,23 @@ top_n_communes <- as.integer(params$top_n_communes)
 level_balance_vars <- c(
   "nb_menages",
   "nb_logements",
-  "nb_RP_1_piece",
-  "nb_actifs",
-  "aire"
+  "densite_menages"
 )
 
-# Variable calée en différence pré-traitement.
-pretrend_balance_var <- "nb_logements"
+# Variable calée en différence pré-traitement pour renforcer l'hypothèse de tendances parallèles.
+# Elle doit correspondre à l'outcome, ici nb_RP_en_loc.
+pretrend_balance_var <- outcome_var
 
-if (outcome_var %in% c(level_balance_vars, pretrend_balance_var)) {
+# Variable dont la variation pré-traitement est incluse dans l'entropy balancing.
+ebal_logements_pretrend_var <- "nb_logements"
+
+# Variable dont la variation post-traitement distingue les deux configurations DiD.
+# Config. 1 l'inclut dans la régression ; Config. 2 ne l'inclut pas.
+regression_post_diff_var <- "nb_logements"
+
+if (outcome_var %in% level_balance_vars) {
   warning(
-    "L'outcome choisi est aussi présent dans les variables de calage/contrôle. ",
+    "L'outcome choisi est aussi présent dans les variables de calage en niveau. ",
     "Vérifie que c'est bien volontaire. Par défaut, outcome_var devrait être nb_RP_en_loc."
   )
 }
@@ -138,9 +149,21 @@ list(
   ebal_level_year = ebal_level_year,
   level_balance_vars = level_balance_vars,
   pretrend_balance_var = pretrend_balance_var,
+  ebal_logements_pretrend_var = ebal_logements_pretrend_var,
+  regression_post_diff_var = regression_post_diff_var,
   n_moments = n_moments
 )
 ```
+
+## Note sur la densité
+
+Dans cette version, le calage ne se fait plus directement sur `aire`. À la place, on crée :
+
+```{r density-definition, eval=FALSE}
+densite_menages = nb_menages / aire
+```
+
+L'idée est de conserver `nb_menages`, qui mesure la taille résidentielle de l'IRIS, tout en remplaçant la taille spatiale brute par une mesure plus directement liée à la structure urbaine : la densité de ménages. Ce n'est pas strictement équivalent à caler séparément sur `nb_menages` et `aire`, car la densité est un ratio. Dans cette version, on retire aussi `nb_RP_1_piece` afin de tester si les résultats dépendent du calage sur la structure des petits logements. Il faudra donc comparer les poids et les résultats aux versions précédentes.
 
 # Fonctions auxiliaires
 
@@ -355,7 +378,14 @@ commune_names <- if (file.exists(file_commune_names)) {
   NULL
 }
 
-required_base_cols <- c("COM", "IRIS", "annee", outcome_var, level_balance_vars, pretrend_balance_var)
+# `densite_menages` est construite à partir de `nb_menages` et `aire` après l'import.
+# On vérifie donc les colonnes brutes nécessaires, sans exiger que `densite_menages` existe déjà dans le CSV.
+raw_level_balance_vars <- setdiff(level_balance_vars, "densite_menages")
+required_base_cols <- unique(c(
+  "COM", "IRIS", "annee",
+  outcome_var, raw_level_balance_vars, pretrend_balance_var, ebal_logements_pretrend_var, regression_post_diff_var,
+  if ("densite_menages" %in% level_balance_vars) c("nb_menages", "aire") else character(0)
+))
 missing_base_cols <- setdiff(required_base_cols, names(data_raw))
 
 if (length(missing_base_cols) > 0) {
@@ -375,7 +405,10 @@ data <- data_raw %>%
   mutate(
     COM = as.character(COM),
     IRIS = as.character(IRIS),
-    annee = as.integer(annee)
+    annee = as.integer(annee),
+    # Densité de ménages : nombre de ménages par unité d'aire.
+    # Si l'aire vaut 0 ou est manquante, on met NA pour éviter une division invalide.
+    densite_menages = ifelse(!is.na(aire) & aire > 0, nb_menages / aire, NA_real_)
   )
 
 communes_cluster_paris <- communes_cluster_paris %>%
@@ -483,7 +516,9 @@ outcome_post_1 <- paste0("outcome_", post_y1)
 outcome_post_2 <- paste0("outcome_", post_y2)
 outcome_diff_name <- paste0("d_", outcome_var, "_", post_y1, "_", post_y2)
 
-# Différence pré-traitement de nb_logements pour le calage et, en configuration 1, la régression.
+# Différence pré-traitement de l'outcome pour le calage.
+# C'est cette variable qui est utilisée pour renforcer l'hypothèse de tendances parallèles :
+# le contrôle pondéré doit reproduire la trajectoire pré-traitement de nb_RP_en_loc.
 df_pretrend <- make_wide_var(
   df = df_reduced,
   var = pretrend_balance_var,
@@ -494,6 +529,33 @@ df_pretrend <- make_wide_var(
 pretrend_1 <- paste0("pretrend_", pre_y1)
 pretrend_2 <- paste0("pretrend_", pre_y2)
 pretrend_diff_name <- paste0("d_", pretrend_balance_var, "_", pre_y1, "_", pre_y2)
+
+# Variation pré-traitement de nb_logements.
+# Elle est utilisée dans le calage EB commun aux deux configurations.
+df_ebal_logements_pretrend <- make_wide_var(
+  df = df_reduced,
+  var = ebal_logements_pretrend_var,
+  years = c(pre_y1, pre_y2),
+  prefix = "log_pre_"
+)
+
+log_pre_1 <- paste0("log_pre_", pre_y1)
+log_pre_2 <- paste0("log_pre_", pre_y2)
+ebal_logements_pretrend_name <- paste0("d_", ebal_logements_pretrend_var, "_", pre_y1, "_", pre_y2)
+
+# Variation post-traitement de nb_logements.
+# Elle ne sert PAS au calage EB. Elle distingue uniquement les deux régressions DiD :
+# Config. 1 l'inclut comme contrôle post-traitement ; Config. 2 ne l'inclut pas.
+df_regression_post_diff <- make_wide_var(
+  df = df_reduced,
+  var = regression_post_diff_var,
+  years = c(post_y1, post_y2),
+  prefix = "log_post_"
+)
+
+log_post_1 <- paste0("log_post_", post_y1)
+log_post_2 <- paste0("log_post_", post_y2)
+regression_post_diff_name <- paste0("d_", regression_post_diff_var, "_", post_y1, "_", post_y2)
 
 # Variables en niveau utilisées pour le calage et comme contrôles de régression.
 df_levels <- df_reduced %>%
@@ -513,9 +575,21 @@ df_analysis <- df_outcome %>%
       select(IRIS, code_com, treated, all_of(pretrend_diff_name)),
     by = c("IRIS", "code_com", "treated")
   ) %>%
+  left_join(
+    df_ebal_logements_pretrend %>%
+      mutate(!!ebal_logements_pretrend_name := .data[[log_pre_2]] - .data[[log_pre_1]]) %>%
+      select(IRIS, code_com, treated, all_of(ebal_logements_pretrend_name)),
+    by = c("IRIS", "code_com", "treated")
+  ) %>%
+  left_join(
+    df_regression_post_diff %>%
+      mutate(!!regression_post_diff_name := .data[[log_post_2]] - .data[[log_post_1]]) %>%
+      select(IRIS, code_com, treated, all_of(regression_post_diff_name)),
+    by = c("IRIS", "code_com", "treated")
+  ) %>%
   left_join(df_levels, by = c("IRIS", "code_com", "treated"))
 
-required_analysis_vars <- c(outcome_diff_name, pretrend_diff_name, level_control_names)
+required_analysis_vars <- c(outcome_diff_name, pretrend_diff_name, ebal_logements_pretrend_name, regression_post_diff_name, level_control_names)
 
 df_analysis <- df_analysis %>%
   filter(if_all(all_of(required_analysis_vars), ~ !is.na(.x)))
@@ -530,10 +604,12 @@ if (length(unique(df_analysis$treated)) != 2) {
 analysis_vars_info <- tibble(
   role = c(
     "Outcome DiD",
-    "Pré-trend calé",
+    "Pré-trend outcome calé dans EB",
+    "Pré-trend nb_logements calé dans EB",
+    "Variation post-traitement nb_logements ; incluse seulement en Config. 1",
     rep("Variable niveau calée", length(level_control_names))
   ),
-  variable = c(outcome_diff_name, pretrend_diff_name, level_control_names)
+  variable = c(outcome_diff_name, pretrend_diff_name, ebal_logements_pretrend_name, regression_post_diff_name, level_control_names)
 )
 
 knitr::kable(analysis_vars_info)
@@ -541,8 +617,10 @@ knitr::kable(analysis_vars_info)
 
 # Entropy balancing commun aux deux configurations
 
+Le calage EB utilise les quatre variables en niveau, la pré-tendance de l'outcome, et la pré-tendance de `nb_logements`. Cette étape est commune aux deux configurations : les poids EB ne changent donc pas entre Config. 1 et Config. 2. La variation post-traitement de `nb_logements` n'intervient pas dans le calage EB ; elle sert uniquement à distinguer les deux régressions finales.
+
 ```{r entropy-balancing}
-ebal_vars <- c(level_control_names, pretrend_diff_name)
+ebal_vars <- c(level_control_names, pretrend_diff_name, ebal_logements_pretrend_name)
 
 X_moments <- build_moment_matrix(df_analysis, ebal_vars, n_moments = n_moments)
 X_ebal <- as.matrix(X_moments)
@@ -595,7 +673,10 @@ knitr::kable(balance_table %>% mutate(across(where(is.numeric), ~ round(.x, 4)))
 # Estimation des deux configurations
 
 ```{r did-estimation}
-controls_config_1 <- c(level_control_names, pretrend_diff_name)
+# Les deux configurations ont le même calage EB, y compris sur d_nb_RP_en_loc et d_nb_logements en pré-traitement.
+# Dans la régression finale, la seule différence est l'inclusion de la variation post-traitement
+# de nb_logements en Config. 1.
+controls_config_1 <- c(level_control_names, regression_post_diff_name)
 controls_config_2 <- level_control_names
 
 formula_config_1 <- as.formula(
@@ -610,10 +691,10 @@ mod_config_1 <- fit_weighted_model(formula_config_1, df_analysis, "w_ebal")
 mod_config_2 <- fit_weighted_model(formula_config_2, df_analysis, "w_ebal")
 
 res_config_1 <- robust_tidy(mod_config_1) %>%
-  mutate(configuration = "Config. 1 — avec diff. pré-traitement nb_logements")
+  mutate(configuration = "Config. 1 — avec variation post-traitement nb_logements")
 
 res_config_2 <- robust_tidy(mod_config_2) %>%
-  mutate(configuration = "Config. 2 — sans diff. pré-traitement nb_logements")
+  mutate(configuration = "Config. 2 — sans variation post-traitement nb_logements")
 
 results_all <- bind_rows(res_config_1, res_config_2) %>%
   select(configuration, term, estimate, std_error_hc1, statistic, p_value)
@@ -626,12 +707,12 @@ regression_results_full <- bind_rows(
   regression_table_multi_se(
     mod_config_1,
     df_analysis,
-    "Config. 1 — avec diff. pré-traitement nb_logements"
+    "Config. 1 — avec variation post-traitement nb_logements"
   ),
   regression_table_multi_se(
     mod_config_2,
     df_analysis,
-    "Config. 2 — sans diff. pré-traitement nb_logements"
+    "Config. 2 — sans variation post-traitement nb_logements"
   )
 )
 
@@ -644,6 +725,8 @@ knitr::kable(regression_results_full_display)
 Le premier tableau donne les coefficients avec les erreurs standards robustes HC1. Le second tableau affiche **tous les coefficients de la régression**, avec trois p-values : classique, robuste HC1 et clusterisée par commune.
 
 Pour l'interprétation principale, il faut regarder en priorité la ligne `treated`. Les autres coefficients sont des contrôles : ils servent à améliorer la comparaison, mais ne doivent pas être interprétés comme des effets causaux.
+
+**Attention méthodologique importante.** La variable `d_nb_logements_2017_2022` est une variation post-traitement. L'inclure en contrôle peut être utile pour tester si l'effet sur le parc locatif subsiste à stock total de logements donné, mais ce n'est pas une spécification DiD “pure”. Si l'encadrement des loyers affecte aussi le nombre total de logements, ce contrôle peut absorber une partie de l'effet causal total. Il faut donc lire Config. 1 comme une spécification conditionnelle, et Config. 2 comme la spécification principale plus proche de l'effet total.
 
 
 ## Comparaison des coefficients d'intérêt
@@ -697,12 +780,12 @@ inference_comparison <- bind_rows(
   extract_treated_inference(
     mod_config_1,
     df_analysis,
-    "Config. 1 — avec diff. pré-traitement nb_logements"
+    "Config. 1 — avec variation post-traitement nb_logements"
   ),
   extract_treated_inference(
     mod_config_2,
     df_analysis,
-    "Config. 2 — sans diff. pré-traitement nb_logements"
+    "Config. 2 — sans variation post-traitement nb_logements"
   )
 ) %>%
   mutate(
@@ -1399,7 +1482,7 @@ ggsave(file.path(export_dir, "06_tendance_complete_indexee.png"), p_trend_full_i
 ggsave(file.path(export_dir, "07_tendance_pretraitement_micro.png"), p_trend_micro, width = 10, height = 6, dpi = 300)
 ggsave(file.path(export_dir, "08_tendance_pretraitement_micro_indexee.png"), p_trend_micro_index, width = 10, height = 6, dpi = 300)
 ggsave(file.path(export_dir, "09_distribution_poids_histogramme.png"), p_weights_hist, width = 10, height = 6, dpi = 300)
-ggsave(file.path(export_dir, "10_distribution_poids_densite.png"), p_weights_density, width = 10, height = 6, dpi = 300)
+ggsave(file.path(export_dir, "10_distribution_poids_densite_sans_nb_RP_1_piece.png"), p_weights_density, width = 10, height = 6, dpi = 300)
 ggsave(file.path(export_dir, "11_contribution_communes.png"), p_weights_barplot, width = 10, height = 12, dpi = 300)
 
 list.files(export_dir)
@@ -1408,7 +1491,7 @@ list.files(export_dir)
 # Notes méthodologiques
 
 1. Le coefficient `treated` dans les régressions pondérées mesure la différence de variation de `r params$outcome_var` entre Paris et le contrôle pondéré sur la période `r params$post_y1`-`r params$post_y2`.
-2. L'entropy balancing est commun aux deux configurations afin que la comparaison porte uniquement sur l'inclusion ou non de la différence pré-traitement de `nb_logements` dans la régression finale.
-3. `nb_logements` est utilisé comme variable de calage/contrôle parce qu'il mesure la taille et la dynamique du parc de logements, mais l'outcome d'intérêt est `nb_RP_en_loc`.
+2. L'entropy balancing est commun aux deux configurations et cale aussi sur la variation pré-traitement de `nb_logements`. La comparaison entre Config. 1 et Config. 2 porte uniquement sur l'inclusion ou non de la variation post-traitement de `nb_logements` dans la régression finale.
+3. `nb_logements` est utilisé comme variable de niveau commune aux deux configurations, comme différence pré-traitement dans l'EB commun, et comme contrôle de régression uniquement dans Config. 1 ; l'outcome d'intérêt reste `nb_RP_en_loc`.
 4. Les erreurs standards sont comparées selon trois approches : classiques, robustes HC1 et clusterisées au niveau de la commune. Les p-values clusterisées sont les plus prudentes et doivent être privilégiées dans l'interprétation principale.
 5. Le document impose des écarts de cinq ans pour les périodes pré-traitement et traitement, conformément à la contrainte de rotation des sondages IRIS.

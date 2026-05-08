@@ -260,3 +260,4 @@ po/*~
 # RStudio Connect folder
 rsconnect/
 #
+.positai
