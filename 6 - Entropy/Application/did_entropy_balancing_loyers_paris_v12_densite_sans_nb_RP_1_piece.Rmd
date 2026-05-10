@@ -1,6 +1,6 @@
 ---
 title: "Encadrement des loyers à Paris — Entropy balancing et Difference-in-Differences"
-author: "Alexis"
+author: "Matis"
 date: "`r Sys.Date()`"
 output:
   html_document:
