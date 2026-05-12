@@ -579,3 +579,42 @@ modeles_paris_full <- run_and_export(
   paires_paris_full,
   "Paris_2006_2017"
 )
+
+
+# Par ville pour voir : 
+
+filter_paires_ville <- function(paires, ville) {
+  prefix <- switch(str_to_lower(ville),
+    "paris" = "75",
+    "lille" = "59",
+    stop(paste("Ville inconnue :", ville))
+  )
+  paires %>%
+    filter(str_starts(as.character(IRIS_trait), prefix))
+}
+
+# ---- 6b. Paris & Lille – 3 années (existant) --------------------------------
+modeles_pl_3yrs <- run_and_export(paires_pl_3yrs, "Paris_Lille_2007_2012_2017")
+
+# ---- 6b-bis. Paris seul (filtré depuis les mêmes paires) -------------------
+run_and_export(
+  filter_paires_ville(paires_pl_3yrs, "paris"),
+  "Paris_seul_2007_2012_2017"
+)
+
+# ---- 6b-ter. Lille seule ---------------------------------------------------
+run_and_export(
+  filter_paires_ville(paires_pl_3yrs, "lille"),
+  "Lille_seule_2007_2012_2017"
+)
+
+run_and_export(
+  filter_paires_ville(paires_pl_full, "paris"),
+  "Paris_seul_2006-17"
+)
+
+# ---- 6b-ter. Lille seule ---------------------------------------------------
+run_and_export(
+  filter_paires_ville(paires_pl_full, "lille"),
+  "Lille_seule_2006-17"
+)

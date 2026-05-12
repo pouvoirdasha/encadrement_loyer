@@ -153,7 +153,7 @@ mapping_paires <- df_paires %>%
 
 
 # Export CSV des paires
-write_csv(mapping_paires, "matching_paires_2007_12_17_Paris_Lille.csv")
+write_csv(mapping_paires, "data/matching_paires_2007_12_17_Paris_Lille.csv")
 
 
 ##### 2 - MATCHING Paris Spécifiquement - 2007, 2012, 2017 
@@ -187,7 +187,7 @@ match.data(mod_3pts) %>%
   select(subclass, IRIS, LIBCOM, traitement, distance) %>%
   pivot_wider(names_from = traitement, values_from = c(IRIS, LIBCOM, distance), 
               names_prefix = "g") %>%
-  write_csv("matching_paires_Paris_3pts_2007_2017.csv")
+  write_csv("data/matching_paires_Paris_3pts_2007_2017.csv")
 
 
 # ==============================================================================
@@ -234,10 +234,8 @@ match.data(mod_full) %>%
   select(subclass, IRIS, LIBCOM, traitement, distance) %>%
   pivot_wider(names_from = traitement, values_from = c(IRIS, LIBCOM, distance), 
               names_prefix = "g") %>%
-  write_csv("matching_paires_Paris_Trajectoire_Full.csv")
+  write_csv("data/matching_paires_Paris_Trajectoire_Full.csv")
 
-
-###### 3 - MATCHING Lille spécifiquement 2007, 12, 17 et puis pour toutes les dates: 
 
 
 
@@ -269,7 +267,7 @@ df_full_wide_both <- df_full_prepared_both %>%
 
 df_full_wide_both <- as.data.frame(df_full_wide_both) # Conversion pour la stabilité de MatchIt
 
-# 3. Création sécurisée de la formule (avec backticks)
+# 3. Formule
 # On exclut les colonnes ID (IRIS, LIBCOM) et la variable dépendante (traitement)
 covariates <- setdiff(names(df_wide), c("IRIS", "LIBCOM", "traitement"))
 formula_str <- paste("traitement ~", paste(paste0("`", covariates, "`"), collapse = " + "))
