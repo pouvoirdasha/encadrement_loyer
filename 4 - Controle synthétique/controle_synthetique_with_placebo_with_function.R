@@ -10,7 +10,9 @@ library(FactoMineR)
 library(factoextra)
 library(Synth)
 
-
+# l'algorithme ne converge pas avec les données sur l'aire et la densité de population
+# accès à la base pour le controle synthétique via ce lien
+# https://drive.google.com/file/d/1EUzKfGvGon6j1_fB6_xNDSPuXVyktFtU/view?usp=sharing
 
 data = fread("base_2006_2022.csv", encoding = "UTF-8")
 
