@@ -1,0 +1,1497 @@
+---
+title: "Encadrement des loyers à Paris — Entropy balancing et Difference-in-Differences"
+author: "Matis"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+    df_print: paged
+params:
+  file_communes: "clusters_paris_sans_lille.csv"
+  file_base: "base_2006_2022_avec_aire.csv"
+  file_commune_names: "commune_2022.csv"
+  outcome_var: "nb_RP_en_loc"
+  pre_y1: 2012
+  pre_y2: 2017
+  post_y1: 2017
+  post_y2: 2022
+  ebal_level_year: 2017
+  n_moments: 1
+  exclude_zero_logements: true
+  exclude_na_logements: true
+  top_n_communes: 30
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  fig.width = 10,
+  fig.height = 6
+)
+```
+
+# Objectif
+
+Ce document teste deux configurations pour estimer l'effet de l'encadrement des loyers à Paris sur l'offre locative, mesurée par le nombre de résidences principales en location (`nb_RP_en_loc`).
+
+L'outcome par défaut est donc : `r params$outcome_var`.
+
+Les deux configurations utilisent le même entropy balancing : le groupe contrôle est pondéré pour être comparable aux IRIS parisiens sur les variables suivantes, mesurées en niveau à l'année `r params$ebal_level_year`. Dans cette version, `nb_actifs` et `nb_RP_1_piece` sont volontairement retirées du calage et des contrôles de régression. On remplace aussi `aire` par une variable de densité des ménages, calculée comme `nb_menages / aire`. Les variables de niveau sont donc :
+
+- `nb_menages`
+- `nb_logements`
+- `densite_menages`
+
+Pour renforcer l'hypothèse de tendances parallèles, l'entropy balancing cale aussi sur deux différences pré-traitement entre `r params$pre_y1` et `r params$pre_y2` :
+
+- la **différence pré-traitement de l'outcome** `nb_RP_en_loc`, qui sert directement à rapprocher les tendances pré-traitement de la variable d'intérêt ;
+- la **différence pré-traitement de `nb_logements`**, qui contrôle la dynamique générale du parc de logements avant traitement.
+
+Autrement dit, le contrôle pondéré est forcé à ressembler à Paris non seulement en niveau, mais aussi sur la trajectoire pré-traitement de l'offre locative et du stock total de logements.
+
+La différence entre les deux configurations porte uniquement sur la régression DiD finale :
+
+- **Configuration 1** : la régression contrôle pour les variables en niveau, dont `densite_menages`, et pour la variation **post-traitement** de `nb_logements` entre `r params$post_y1` et `r params$post_y2`.
+- **Configuration 2** : la régression contrôle pour les mêmes variables en niveau, dont `densite_menages`, mais **pas** pour la variation post-traitement de `nb_logements`.
+
+Important : `d_nb_logements_2012_2017` est utilisée dans l'entropy balancing dans les deux configurations pour équilibrer la dynamique pré-traitement du parc total de logements. En revanche, la différence entre Config. 1 et Config. 2 est l'inclusion ou non de `d_nb_logements_2017_2022` comme contrôle supplémentaire dans la régression DiD.
+
+Ainsi, la seule différence entre Config. 1 et Config. 2 est bien l'inclusion ou non de la variation **post-traitement** de `nb_logements` dans la régression DiD finale. Le calage sur les pré-tendances de `nb_RP_en_loc` et de `nb_logements` est commun aux deux configurations.
+
+Ce document ajoute aussi une section de **robustesse de l'inférence statistique**, les **résultats complets des régressions**, et des graphiques comparant les **poids EB originaux** aux **poids capés**. L'objectif est de ne pas dépendre uniquement de la p-value naïve de `summary(lm)`, qui peut être trop optimiste lorsque l'unité d'observation est l'IRIS mais que le traitement concerne Paris dans son ensemble.
+
+# Packages
+
+```{r packages}
+required_packages <- c(
+  "data.table", "dplyr", "tidyr", "tibble", "ebal", "ggplot2",
+  "broom", "sandwich", "lmtest", "knitr"
+)
+
+missing_packages <- required_packages[!vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)]
+
+if (length(missing_packages) > 0) {
+  stop(
+    "Packages manquants : ", paste(missing_packages, collapse = ", "),
+    ". Installe-les avec install.packages()."
+  )
+}
+
+library(data.table)
+library(dplyr)
+library(tidyr)
+library(tibble)
+library(ebal)
+library(ggplot2)
+library(broom)
+library(sandwich)
+library(lmtest)
+library(knitr)
+```
+
+# Paramètres
+
+```{r parameters}
+file_communes <- params$file_communes
+file_base <- params$file_base
+file_commune_names <- params$file_commune_names
+
+outcome_var <- params$outcome_var
+
+pre_y1 <- as.integer(params$pre_y1)
+pre_y2 <- as.integer(params$pre_y2)
+post_y1 <- as.integer(params$post_y1)
+post_y2 <- as.integer(params$post_y2)
+ebal_level_year <- as.integer(params$ebal_level_year)
+n_moments <- as.integer(params$n_moments)
+
+exclude_zero_logements <- isTRUE(params$exclude_zero_logements)
+exclude_na_logements <- isTRUE(params$exclude_na_logements)
+top_n_communes <- as.integer(params$top_n_communes)
+
+# Variables de calage en niveau et contrôles de régression.
+level_balance_vars <- c(
+  "nb_menages",
+  "nb_logements",
+  "densite_menages"
+)
+
+# Variable calée en différence pré-traitement pour renforcer l'hypothèse de tendances parallèles.
+# Elle doit correspondre à l'outcome, ici nb_RP_en_loc.
+pretrend_balance_var <- outcome_var
+
+# Variable dont la variation pré-traitement est incluse dans l'entropy balancing.
+ebal_logements_pretrend_var <- "nb_logements"
+
+# Variable dont la variation post-traitement distingue les deux configurations DiD.
+# Config. 1 l'inclut dans la régression ; Config. 2 ne l'inclut pas.
+regression_post_diff_var <- "nb_logements"
+
+if (outcome_var %in% level_balance_vars) {
+  warning(
+    "L'outcome choisi est aussi présent dans les variables de calage en niveau. ",
+    "Vérifie que c'est bien volontaire. Par défaut, outcome_var devrait être nb_RP_en_loc."
+  )
+}
+
+stopifnot(pre_y2 - pre_y1 == 5)
+stopifnot(post_y2 - post_y1 == 5)
+stopifnot(n_moments %in% 1:3)
+
+list(
+  outcome_var = outcome_var,
+  periode_pre_traitement = paste(pre_y1, pre_y2, sep = " -> "),
+  periode_traitement = paste(post_y1, post_y2, sep = " -> "),
+  ebal_level_year = ebal_level_year,
+  level_balance_vars = level_balance_vars,
+  pretrend_balance_var = pretrend_balance_var,
+  ebal_logements_pretrend_var = ebal_logements_pretrend_var,
+  regression_post_diff_var = regression_post_diff_var,
+  n_moments = n_moments
+)
+```
+
+## Note sur la densité
+
+Dans cette version, le calage ne se fait plus directement sur `aire`. À la place, on crée :
+
+```{r density-definition, eval=FALSE}
+densite_menages = nb_menages / aire
+```
+
+L'idée est de conserver `nb_menages`, qui mesure la taille résidentielle de l'IRIS, tout en remplaçant la taille spatiale brute par une mesure plus directement liée à la structure urbaine : la densité de ménages. Ce n'est pas strictement équivalent à caler séparément sur `nb_menages` et `aire`, car la densité est un ratio. Dans cette version, on retire aussi `nb_RP_1_piece` afin de tester si les résultats dépendent du calage sur la structure des petits logements. Il faudra donc comparer les poids et les résultats aux versions précédentes.
+
+# Fonctions auxiliaires
+
+```{r helper-functions}
+safe_weighted_mean <- function(x, w) {
+  ok <- !is.na(x) & !is.na(w)
+  if (!any(ok)) return(NA_real_)
+  weighted.mean(x[ok], w[ok])
+}
+
+build_moment_matrix <- function(df, vars, n_moments = 1) {
+  n_moments <- as.integer(n_moments)
+
+  if (length(vars) == 0) {
+    stop("Aucune variable de calage n'a été fournie.")
+  }
+
+  if (!n_moments %in% 1:3) {
+    stop("Le nombre de moments doit être égal à 1, 2 ou 3.")
+  }
+
+  X_raw <- df %>%
+    select(all_of(vars)) %>%
+    mutate(across(everything(), as.numeric))
+
+  sds <- sapply(X_raw, sd, na.rm = TRUE)
+
+  if (any(is.na(sds) | sds == 0)) {
+    bad_vars <- names(sds)[is.na(sds) | sds == 0]
+    stop(
+      paste0(
+        "Impossible de construire les moments : variance nulle ou manquante pour ",
+        paste(bad_vars, collapse = ", "),
+        ". Retire cette variable du calage ou change d'année/période."
+      )
+    )
+  }
+
+  X_scaled <- as.data.frame(scale(X_raw))
+
+  moment_list <- lapply(seq_len(n_moments), function(m) {
+    tmp <- X_scaled^m
+    names(tmp) <- paste0(names(X_scaled), "_moment_", m)
+    tmp
+  })
+
+  bind_cols(moment_list)
+}
+
+make_wide_var <- function(df, var, years, prefix) {
+  df %>%
+    filter(annee %in% years) %>%
+    select(IRIS, code_com, treated, annee, all_of(var)) %>%
+    distinct() %>%
+    pivot_wider(
+      names_from = annee,
+      values_from = all_of(var),
+      names_prefix = prefix
+    )
+}
+
+robust_tidy <- function(model) {
+  broom::tidy(lmtest::coeftest(model, vcov. = sandwich::vcovHC(model, type = "HC1"))) %>%
+    rename(
+      std_error_hc1 = std.error,
+      p_value = p.value
+    )
+}
+
+
+# Extrait proprement le coefficient treated avec plusieurs types d'erreurs standards.
+# Pourquoi ? Parce que la p-value classique de summary(lm) suppose une indépendance forte
+# entre IRIS. Dans ce projet, cette hypothèse est discutable : les IRIS d'une même commune
+# peuvent partager des chocs communs.
+extract_treated_inference <- function(model, data_for_cluster, label) {
+  classical <- broom::tidy(model) %>%
+    filter(term == "treated") %>%
+    transmute(
+      estimate = estimate,
+      se_classique = std.error,
+      p_classique = p.value
+    )
+
+  hc1 <- broom::tidy(lmtest::coeftest(model, vcov. = sandwich::vcovHC(model, type = "HC1"))) %>%
+    filter(term == "treated") %>%
+    transmute(
+      se_hc1 = std.error,
+      p_hc1 = p.value
+    )
+
+  cluster_result <- tryCatch({
+    cl <- sandwich::vcovCL(model, cluster = data_for_cluster$code_com, type = "HC1")
+    broom::tidy(lmtest::coeftest(model, vcov. = cl)) %>%
+      filter(term == "treated") %>%
+      transmute(
+        se_cluster_commune = std.error,
+        p_cluster_commune = p.value
+      )
+  }, error = function(e) {
+    tibble(
+      se_cluster_commune = NA_real_,
+      p_cluster_commune = NA_real_
+    )
+  })
+
+  bind_cols(classical, hc1, cluster_result) %>%
+    mutate(
+      modele = label,
+      n_obs = nobs(model),
+      n_communes = n_distinct(data_for_cluster$code_com)
+    ) %>%
+    select(modele, n_obs, n_communes, estimate, se_classique, p_classique,
+           se_hc1, p_hc1, se_cluster_commune, p_cluster_commune)
+}
+
+# Calcule une taille effective de l'échantillon contrôle après pondération.
+# Plus cette valeur est faible, plus les résultats peuvent dépendre d'un petit nombre d'IRIS.
+effective_sample_size <- function(w) {
+  (sum(w, na.rm = TRUE)^2) / sum(w^2, na.rm = TRUE)
+}
+
+# Cape les poids extrêmes puis les renormalise pour conserver le poids total du contrôle.
+# Cela permet de tester si l'effet estimé est porté par quelques IRIS très fortement pondérés.
+cap_and_rescale_weights <- function(data, q = 0.99, weight_var = "w_ebal") {
+  w <- data[[weight_var]]
+  control <- data$treated == 0
+
+  cap_value <- quantile(w[control], q, na.rm = TRUE)
+  target_total <- sum(w[control], na.rm = TRUE)
+
+  w_new <- w
+  w_new[control] <- pmin(w_new[control], cap_value)
+  current_total <- sum(w_new[control], na.rm = TRUE)
+
+  if (is.finite(current_total) && current_total > 0) {
+    w_new[control] <- w_new[control] * target_total / current_total
+  }
+
+  w_new
+}
+
+fit_weighted_model <- function(formula, data, weight_col) {
+  # Important : lm() évalue l'argument `weights` dans le data.frame.
+  # Si on écrit directement weights = data[[weight_col]], certains chunks
+  # peuvent échouer avec "object 'weight_col' not found" au moment du knit.
+  # On crée donc une colonne temporaire au nom fixe, puis on l'utilise dans lm().
+  data_tmp <- data %>%
+    mutate(.analysis_weight = .data[[weight_col]])
+
+  lm(formula, data = data_tmp, weights = .analysis_weight)
+}
+
+# Tableau complet des résultats d'une régression avec plusieurs inférences.
+# On l'utilise pour afficher tous les coefficients, pas seulement treated.
+regression_table_multi_se <- function(model, data_for_cluster, model_label) {
+  classical <- broom::tidy(model) %>%
+    select(term, estimate, se_classique = std.error, p_classique = p.value)
+
+  hc1 <- broom::tidy(lmtest::coeftest(model, vcov. = sandwich::vcovHC(model, type = "HC1"))) %>%
+    select(term, se_hc1 = std.error, p_hc1 = p.value)
+
+  cluster <- tryCatch({
+    cl <- sandwich::vcovCL(model, cluster = data_for_cluster$code_com, type = "HC1")
+    broom::tidy(lmtest::coeftest(model, vcov. = cl)) %>%
+      select(term, se_cluster_commune = std.error, p_cluster_commune = p.value)
+  }, error = function(e) {
+    tibble(
+      term = classical$term,
+      se_cluster_commune = NA_real_,
+      p_cluster_commune = NA_real_
+    )
+  })
+
+  classical %>%
+    left_join(hc1, by = "term") %>%
+    left_join(cluster, by = "term") %>%
+    mutate(modele = model_label, .before = 1)
+}
+
+# Calcule l'effet agrégé indicatif pour Paris.
+# Si l'effet est négatif, logements_perdus_indicatif exprime le nombre de résidences principales en location
+# potentiellement perdues par rapport au contrefactuel.
+compute_paris_effect <- function(results_df, reference_level, n_iris_paris) {
+  results_df %>%
+    mutate(
+      n_iris_paris = n_iris_paris,
+      niveau_reference_paris = reference_level,
+      effet_total_paris_indicatif = estimate * n_iris_paris,
+      logements_perdus_indicatif = ifelse(effet_total_paris_indicatif < 0, -effet_total_paris_indicatif, 0),
+      effet_pct_reference = 100 * effet_total_paris_indicatif / niveau_reference_paris,
+      logements_perdus_pct_reference = ifelse(effet_total_paris_indicatif < 0, -effet_pct_reference, 0)
+    )
+}
+```
+
+# Import des données
+
+```{r import-data}
+if (!file.exists(file_communes)) {
+  stop("Fichier introuvable : ", file_communes)
+}
+if (!file.exists(file_base)) {
+  stop("Fichier introuvable : ", file_base)
+}
+
+communes_cluster_paris <- fread(file_communes)
+data_raw <- fread(file_base)
+
+commune_names <- if (file.exists(file_commune_names)) {
+  fread(file_commune_names)
+} else {
+  NULL
+}
+
+# `densite_menages` est construite à partir de `nb_menages` et `aire` après l'import.
+# On vérifie donc les colonnes brutes nécessaires, sans exiger que `densite_menages` existe déjà dans le CSV.
+raw_level_balance_vars <- setdiff(level_balance_vars, "densite_menages")
+required_base_cols <- unique(c(
+  "COM", "IRIS", "annee",
+  outcome_var, raw_level_balance_vars, pretrend_balance_var, ebal_logements_pretrend_var, regression_post_diff_var,
+  if ("densite_menages" %in% level_balance_vars) c("nb_menages", "aire") else character(0)
+))
+missing_base_cols <- setdiff(required_base_cols, names(data_raw))
+
+if (length(missing_base_cols) > 0) {
+  stop("Colonnes absentes de la base principale : ", paste(missing_base_cols, collapse = ", "))
+}
+
+if (!"COM" %in% names(communes_cluster_paris)) {
+  stop("Le fichier des communes contrôle doit contenir une colonne COM.")
+}
+
+if (!is.null(commune_names) && !all(c("COM", "LIBELLE") %in% names(commune_names))) {
+  warning("Le fichier commune_2022.csv ne contient pas COM et LIBELLE. Les noms de communes ne seront pas utilisés.")
+  commune_names <- NULL
+}
+
+data <- data_raw %>%
+  mutate(
+    COM = as.character(COM),
+    IRIS = as.character(IRIS),
+    annee = as.integer(annee),
+    # Densité de ménages : nombre de ménages par unité d'aire.
+    # Si l'aire vaut 0 ou est manquante, on met NA pour éviter une division invalide.
+    densite_menages = ifelse(!is.na(aire) & aire > 0, nb_menages / aire, NA_real_)
+  )
+
+communes_cluster_paris <- communes_cluster_paris %>%
+  mutate(COM = as.character(COM))
+
+if (!is.null(commune_names)) {
+  commune_names <- commune_names %>%
+    mutate(COM = as.character(COM))
+}
+
+available_years <- sort(unique(data$annee[!is.na(data$annee)]))
+available_years
+```
+
+# Construction de l'échantillon
+
+```{r sample-construction}
+paris_com <- as.character(75101:75120)
+donor_com <- as.character(communes_cluster_paris$COM)
+
+analysis_years <- unique(c(pre_y1, pre_y2, post_y1, post_y2, ebal_level_year))
+
+if (!all(analysis_years %in% available_years)) {
+  stop(
+    "Certaines années demandées ne sont pas disponibles : ",
+    paste(setdiff(analysis_years, available_years), collapse = ", ")
+  )
+}
+
+df_reduced <- data %>%
+  mutate(code_com = as.character(COM)) %>%
+  filter(code_com %in% donor_com | code_com %in% paris_com) %>%
+  mutate(treated = as.integer(code_com %in% paris_com))
+
+n_initial <- df_reduced %>% distinct(IRIS) %>% nrow()
+n_initial_paris <- df_reduced %>% filter(treated == 1) %>% distinct(IRIS) %>% nrow()
+n_initial_control <- df_reduced %>% filter(treated == 0) %>% distinct(IRIS) %>% nrow()
+
+iris_to_remove <- character(0)
+
+if (exclude_zero_logements || exclude_na_logements) {
+  df_logements_window <- df_reduced %>%
+    filter(annee >= pre_y1, annee <= max(available_years))
+
+  if (exclude_zero_logements) {
+    iris_zero <- df_logements_window %>%
+      group_by(IRIS) %>%
+      summarise(has_zero = any(nb_logements == 0, na.rm = TRUE), .groups = "drop") %>%
+      filter(has_zero) %>%
+      pull(IRIS)
+
+    iris_to_remove <- union(iris_to_remove, iris_zero)
+  }
+
+  if (exclude_na_logements) {
+    iris_na <- df_logements_window %>%
+      group_by(IRIS) %>%
+      summarise(has_na = any(is.na(nb_logements)), .groups = "drop") %>%
+      filter(has_na) %>%
+      pull(IRIS)
+
+    iris_to_remove <- union(iris_to_remove, iris_na)
+  }
+
+  df_reduced <- df_reduced %>%
+    filter(!IRIS %in% iris_to_remove)
+}
+
+sample_summary <- tibble(
+  indicateur = c(
+    "IRIS initiaux",
+    "IRIS initiaux Paris",
+    "IRIS initiaux contrôle",
+    "IRIS retirés par les filtres logements",
+    "IRIS finaux",
+    "IRIS finaux Paris",
+    "IRIS finaux contrôle"
+  ),
+  valeur = c(
+    n_initial,
+    n_initial_paris,
+    n_initial_control,
+    length(unique(iris_to_remove)),
+    df_reduced %>% distinct(IRIS) %>% nrow(),
+    df_reduced %>% filter(treated == 1) %>% distinct(IRIS) %>% nrow(),
+    df_reduced %>% filter(treated == 0) %>% distinct(IRIS) %>% nrow()
+  )
+)
+
+knitr::kable(sample_summary)
+```
+
+# Base wide et variables de calage
+
+```{r wide-analysis-base}
+# Outcome DiD : variation de nb_RP_en_loc, par défaut, entre post_y1 et post_y2.
+df_outcome <- make_wide_var(
+  df = df_reduced,
+  var = outcome_var,
+  years = c(post_y1, post_y2),
+  prefix = "outcome_"
+)
+
+outcome_post_1 <- paste0("outcome_", post_y1)
+outcome_post_2 <- paste0("outcome_", post_y2)
+outcome_diff_name <- paste0("d_", outcome_var, "_", post_y1, "_", post_y2)
+
+# Différence pré-traitement de l'outcome pour le calage.
+# C'est cette variable qui est utilisée pour renforcer l'hypothèse de tendances parallèles :
+# le contrôle pondéré doit reproduire la trajectoire pré-traitement de nb_RP_en_loc.
+df_pretrend <- make_wide_var(
+  df = df_reduced,
+  var = pretrend_balance_var,
+  years = c(pre_y1, pre_y2),
+  prefix = "pretrend_"
+)
+
+pretrend_1 <- paste0("pretrend_", pre_y1)
+pretrend_2 <- paste0("pretrend_", pre_y2)
+pretrend_diff_name <- paste0("d_", pretrend_balance_var, "_", pre_y1, "_", pre_y2)
+
+# Variation pré-traitement de nb_logements.
+# Elle est utilisée dans le calage EB commun aux deux configurations.
+df_ebal_logements_pretrend <- make_wide_var(
+  df = df_reduced,
+  var = ebal_logements_pretrend_var,
+  years = c(pre_y1, pre_y2),
+  prefix = "log_pre_"
+)
+
+log_pre_1 <- paste0("log_pre_", pre_y1)
+log_pre_2 <- paste0("log_pre_", pre_y2)
+ebal_logements_pretrend_name <- paste0("d_", ebal_logements_pretrend_var, "_", pre_y1, "_", pre_y2)
+
+# Variation post-traitement de nb_logements.
+# Elle ne sert PAS au calage EB. Elle distingue uniquement les deux régressions DiD :
+# Config. 1 l'inclut comme contrôle post-traitement ; Config. 2 ne l'inclut pas.
+df_regression_post_diff <- make_wide_var(
+  df = df_reduced,
+  var = regression_post_diff_var,
+  years = c(post_y1, post_y2),
+  prefix = "log_post_"
+)
+
+log_post_1 <- paste0("log_post_", post_y1)
+log_post_2 <- paste0("log_post_", post_y2)
+regression_post_diff_name <- paste0("d_", regression_post_diff_var, "_", post_y1, "_", post_y2)
+
+# Variables en niveau utilisées pour le calage et comme contrôles de régression.
+df_levels <- df_reduced %>%
+  filter(annee == ebal_level_year) %>%
+  select(IRIS, code_com, treated, all_of(level_balance_vars)) %>%
+  distinct()
+
+level_control_names <- paste0(level_balance_vars, "_lvl_", ebal_level_year)
+names(df_levels)[match(level_balance_vars, names(df_levels))] <- level_control_names
+
+# Fusion.
+df_analysis <- df_outcome %>%
+  mutate(!!outcome_diff_name := .data[[outcome_post_2]] - .data[[outcome_post_1]]) %>%
+  left_join(
+    df_pretrend %>%
+      mutate(!!pretrend_diff_name := .data[[pretrend_2]] - .data[[pretrend_1]]) %>%
+      select(IRIS, code_com, treated, all_of(pretrend_diff_name)),
+    by = c("IRIS", "code_com", "treated")
+  ) %>%
+  left_join(
+    df_ebal_logements_pretrend %>%
+      mutate(!!ebal_logements_pretrend_name := .data[[log_pre_2]] - .data[[log_pre_1]]) %>%
+      select(IRIS, code_com, treated, all_of(ebal_logements_pretrend_name)),
+    by = c("IRIS", "code_com", "treated")
+  ) %>%
+  left_join(
+    df_regression_post_diff %>%
+      mutate(!!regression_post_diff_name := .data[[log_post_2]] - .data[[log_post_1]]) %>%
+      select(IRIS, code_com, treated, all_of(regression_post_diff_name)),
+    by = c("IRIS", "code_com", "treated")
+  ) %>%
+  left_join(df_levels, by = c("IRIS", "code_com", "treated"))
+
+required_analysis_vars <- c(outcome_diff_name, pretrend_diff_name, ebal_logements_pretrend_name, regression_post_diff_name, level_control_names)
+
+df_analysis <- df_analysis %>%
+  filter(if_all(all_of(required_analysis_vars), ~ !is.na(.x)))
+
+if (nrow(df_analysis) == 0) {
+  stop("Aucune observation complète après construction de la base d'analyse.")
+}
+if (length(unique(df_analysis$treated)) != 2) {
+  stop("La base finale doit contenir à la fois des IRIS traités et des IRIS contrôles.")
+}
+
+analysis_vars_info <- tibble(
+  role = c(
+    "Outcome DiD",
+    "Pré-trend outcome calé dans EB",
+    "Pré-trend nb_logements calé dans EB",
+    "Variation post-traitement nb_logements ; incluse seulement en Config. 1",
+    rep("Variable niveau calée", length(level_control_names))
+  ),
+  variable = c(outcome_diff_name, pretrend_diff_name, ebal_logements_pretrend_name, regression_post_diff_name, level_control_names)
+)
+
+knitr::kable(analysis_vars_info)
+```
+
+# Entropy balancing commun aux deux configurations
+
+Le calage EB utilise les quatre variables en niveau, la pré-tendance de l'outcome, et la pré-tendance de `nb_logements`. Cette étape est commune aux deux configurations : les poids EB ne changent donc pas entre Config. 1 et Config. 2. La variation post-traitement de `nb_logements` n'intervient pas dans le calage EB ; elle sert uniquement à distinguer les deux régressions finales.
+
+```{r entropy-balancing}
+ebal_vars <- c(level_control_names, pretrend_diff_name, ebal_logements_pretrend_name)
+
+X_moments <- build_moment_matrix(df_analysis, ebal_vars, n_moments = n_moments)
+X_ebal <- as.matrix(X_moments)
+
+ebal_out <- ebalance(
+  Treatment = df_analysis$treated,
+  X = X_ebal
+)
+
+df_analysis <- df_analysis %>%
+  mutate(w_ebal = 1)
+
+df_analysis$w_ebal[df_analysis$treated == 0] <- ebal_out$w
+
+summary(df_analysis$w_ebal[df_analysis$treated == 0])
+```
+
+## Vérification du calage
+
+```{r balance-check}
+balance_table <- bind_rows(lapply(ebal_vars, function(v) {
+  tibble(
+    variable = v,
+    paris = mean(df_analysis[[v]][df_analysis$treated == 1], na.rm = TRUE),
+    controle_non_pondere = mean(df_analysis[[v]][df_analysis$treated == 0], na.rm = TRUE),
+    controle_pondere = safe_weighted_mean(
+      df_analysis[[v]][df_analysis$treated == 0],
+      df_analysis$w_ebal[df_analysis$treated == 0]
+    ),
+    ecart_avant = controle_non_pondere - paris,
+    ecart_apres = controle_pondere - paris
+  )
+}))
+
+balance_moments_table <- bind_rows(lapply(names(X_moments), function(v) {
+  tibble(
+    variable = v,
+    paris = mean(X_moments[[v]][df_analysis$treated == 1], na.rm = TRUE),
+    controle_non_pondere = mean(X_moments[[v]][df_analysis$treated == 0], na.rm = TRUE),
+    controle_pondere = safe_weighted_mean(
+      X_moments[[v]][df_analysis$treated == 0],
+      df_analysis$w_ebal[df_analysis$treated == 0]
+    )
+  )
+}))
+
+knitr::kable(balance_table %>% mutate(across(where(is.numeric), ~ round(.x, 4))))
+```
+
+# Estimation des deux configurations
+
+```{r did-estimation}
+# Les deux configurations ont le même calage EB, y compris sur d_nb_RP_en_loc et d_nb_logements en pré-traitement.
+# Dans la régression finale, la seule différence est l'inclusion de la variation post-traitement
+# de nb_logements en Config. 1.
+controls_config_1 <- c(level_control_names, regression_post_diff_name)
+controls_config_2 <- level_control_names
+
+formula_config_1 <- as.formula(
+  paste(outcome_diff_name, "~ treated +", paste(controls_config_1, collapse = " + "))
+)
+
+formula_config_2 <- as.formula(
+  paste(outcome_diff_name, "~ treated +", paste(controls_config_2, collapse = " + "))
+)
+
+mod_config_1 <- fit_weighted_model(formula_config_1, df_analysis, "w_ebal")
+mod_config_2 <- fit_weighted_model(formula_config_2, df_analysis, "w_ebal")
+
+res_config_1 <- robust_tidy(mod_config_1) %>%
+  mutate(configuration = "Config. 1 — avec variation post-traitement nb_logements")
+
+res_config_2 <- robust_tidy(mod_config_2) %>%
+  mutate(configuration = "Config. 2 — sans variation post-traitement nb_logements")
+
+results_all <- bind_rows(res_config_1, res_config_2) %>%
+  select(configuration, term, estimate, std_error_hc1, statistic, p_value)
+
+knitr::kable(results_all, digits = 4)
+
+# Tableaux complets de régression : utiles pour vérifier non seulement l'effet treated,
+# mais aussi le rôle des contrôles.
+regression_results_full <- bind_rows(
+  regression_table_multi_se(
+    mod_config_1,
+    df_analysis,
+    "Config. 1 — avec variation post-traitement nb_logements"
+  ),
+  regression_table_multi_se(
+    mod_config_2,
+    df_analysis,
+    "Config. 2 — sans variation post-traitement nb_logements"
+  )
+)
+
+regression_results_full_display <- regression_results_full %>%
+  mutate(across(where(is.numeric), ~ round(.x, 4)))
+
+knitr::kable(regression_results_full_display)
+```
+
+Le premier tableau donne les coefficients avec les erreurs standards robustes HC1. Le second tableau affiche **tous les coefficients de la régression**, avec trois p-values : classique, robuste HC1 et clusterisée par commune.
+
+Pour l'interprétation principale, il faut regarder en priorité la ligne `treated`. Les autres coefficients sont des contrôles : ils servent à améliorer la comparaison, mais ne doivent pas être interprétés comme des effets causaux.
+
+**Attention méthodologique importante.** La variable `d_nb_logements_2017_2022` est une variation post-traitement. L'inclure en contrôle peut être utile pour tester si l'effet sur le parc locatif subsiste à stock total de logements donné, mais ce n'est pas une spécification DiD “pure”. Si l'encadrement des loyers affecte aussi le nombre total de logements, ce contrôle peut absorber une partie de l'effet causal total. Il faut donc lire Config. 1 comme une spécification conditionnelle, et Config. 2 comme la spécification principale plus proche de l'effet total.
+
+
+## Comparaison des coefficients d'intérêt
+
+```{r treatment-effect-comparison}
+treatment_comparison <- results_all %>%
+  filter(term == "treated") %>%
+  mutate(
+    conf_low_95 = estimate - 1.96 * std_error_hc1,
+    conf_high_95 = estimate + 1.96 * std_error_hc1
+  ) %>%
+  select(configuration, estimate, std_error_hc1, conf_low_95, conf_high_95, p_value)
+
+knitr::kable(treatment_comparison, digits = 4)
+```
+
+```{r treatment-effect-plot}
+ggplot(treatment_comparison, aes(x = configuration, y = estimate)) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_point(size = 3) +
+  geom_errorbar(aes(ymin = conf_low_95, ymax = conf_high_95), width = 0.15) +
+  coord_flip() +
+  labs(
+    title = paste0("Effet estimé sur la variation de ", outcome_var),
+    subtitle = paste0("Période DiD : ", post_y1, "-", post_y2, " ; IC 95% robustes HC1"),
+    x = NULL,
+    y = "Coefficient treated"
+  ) +
+  theme_minimal()
+```
+
+
+# Robustesse de l'inférence statistique
+
+Cette section est importante parce que la p-value issue directement de `summary(lm)` peut être trompeuse dans ce projet.
+
+Le modèle est estimé au niveau IRIS, mais le traitement — l'encadrement des loyers à Paris — varie en pratique au niveau de Paris. Les IRIS ne sont donc probablement pas totalement indépendants les uns des autres. En particulier, deux IRIS d'une même commune peuvent être affectés par les mêmes tendances locales du marché immobilier, les mêmes politiques urbaines ou les mêmes dynamiques démographiques.
+
+Pour cette raison, on compare trois manières de calculer l'incertitude statistique :
+
+1. **P-value classique** : celle de `summary(lm)`. Elle est utile comme point de départ, mais elle repose sur des hypothèses fortes.
+2. **P-value robuste HC1** : elle corrige l'hétéroscédasticité, c'est-à-dire le fait que la variance des erreurs puisse varier entre IRIS.
+3. **P-value clusterisée par commune** : elle autorise une corrélation arbitraire entre IRIS d'une même commune. C'est généralement la plus prudente des trois dans ce design.
+
+Dans l'interprétation, il faut donc éviter de dire seulement : "le coefficient est significatif à 5 %". Il vaut mieux regarder si le signe, l'ordre de grandeur et la p-value restent stables quand on change la méthode d'inférence.
+
+## Comparaison des p-values : classique, robuste HC1 et cluster commune
+
+```{r inference-comparison}
+inference_comparison <- bind_rows(
+  extract_treated_inference(
+    mod_config_1,
+    df_analysis,
+    "Config. 1 — avec variation post-traitement nb_logements"
+  ),
+  extract_treated_inference(
+    mod_config_2,
+    df_analysis,
+    "Config. 2 — sans variation post-traitement nb_logements"
+  )
+) %>%
+  mutate(
+    interpretation_pvalue = case_when(
+      is.na(p_cluster_commune) ~ "P-value cluster indisponible",
+      p_cluster_commune < 0.01 ~ "Significatif à 1 % avec cluster commune",
+      p_cluster_commune < 0.05 ~ "Significatif à 5 % avec cluster commune",
+      p_cluster_commune < 0.10 ~ "Significatif à 10 % avec cluster commune",
+      TRUE ~ "Non significatif avec cluster commune"
+    )
+  )
+
+knitr::kable(inference_comparison, digits = 4)
+
+# Version longue pour graphique : chaque configuration est affichée avec trois types d'erreurs standards.
+inference_plot_data <- inference_comparison %>%
+  select(modele, estimate, se_classique, se_hc1, se_cluster_commune) %>%
+  pivot_longer(
+    cols = starts_with("se_"),
+    names_to = "type_inference",
+    values_to = "std_error"
+  ) %>%
+  mutate(
+    type_inference = recode(
+      type_inference,
+      se_classique = "Classique",
+      se_hc1 = "Robuste HC1",
+      se_cluster_commune = "Cluster commune"
+    ),
+    conf_low_95 = estimate - 1.96 * std_error,
+    conf_high_95 = estimate + 1.96 * std_error
+  )
+```
+
+```{r inference-comparison-plot}
+ggplot(inference_plot_data, aes(x = modele, y = estimate)) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_point(size = 2.8) +
+  geom_errorbar(aes(ymin = conf_low_95, ymax = conf_high_95), width = 0.15) +
+  coord_flip() +
+  facet_wrap(~ type_inference) +
+  labs(
+    title = "Effet estimé selon la méthode de calcul de l'incertitude",
+    subtitle = "Les intervalles les plus larges indiquent une inférence plus prudente",
+    x = NULL,
+    y = "Coefficient treated et intervalle à 95 %"
+  ) +
+  theme_minimal()
+```
+
+**Comment lire ce tableau ?**
+
+- Si `p_classique` est faible mais que `p_cluster_commune` devient élevée, le résultat est fragile : il dépend probablement d'une hypothèse trop forte d'indépendance entre IRIS.
+- Si les trois p-values sont proches, l'inférence est plus rassurante.
+- Si le coefficient reste stable mais que la significativité disparaît avec les clusters, cela ne veut pas forcément dire qu'il n'y a pas d'effet. Cela veut plutôt dire que l'étude manque peut-être de puissance statistique une fois la dépendance intra-commune prise en compte.
+
+## Diagnostic de concentration des poids
+
+L'entropy balancing peut produire de très bons équilibres de covariables, mais parfois au prix de poids très concentrés sur quelques IRIS ou quelques communes. Si quelques unités contrôle reçoivent des poids très élevés, alors le coefficient et sa p-value peuvent être sensibles à ces unités.
+
+On calcule donc la **taille effective de l'échantillon contrôle pondéré**. Elle se lit comme le nombre approximatif d'unités contrôle réellement mobilisées après pondération. Par exemple, si tu as 2 000 IRIS contrôle mais une taille effective de 150, cela signifie que l'information utile provient surtout d'un sous-ensemble restreint.
+
+```{r effective-sample-size}
+control_weights <- df_analysis$w_ebal[df_analysis$treated == 0]
+
+weight_concentration <- tibble(
+  n_controles_non_ponderes = sum(df_analysis$treated == 0),
+  somme_poids_controle = sum(control_weights, na.rm = TRUE),
+  taille_effective_controle = effective_sample_size(control_weights),
+  ratio_taille_effective = taille_effective_controle / n_controles_non_ponderes,
+  poids_max = max(control_weights, na.rm = TRUE),
+  poids_p95 = quantile(control_weights, 0.95, na.rm = TRUE),
+  poids_p99 = quantile(control_weights, 0.99, na.rm = TRUE)
+)
+
+knitr::kable(weight_concentration, digits = 4)
+```
+
+**Interprétation pédagogique :**
+
+- Une taille effective proche du nombre réel d'IRIS contrôle est rassurante.
+- Une taille effective très faible indique que le contrefactuel de Paris est construit à partir d'un petit nombre d'unités très pondérées.
+- Dans ce cas, les p-values doivent être interprétées avec beaucoup de prudence, même si elles sont faibles.
+
+## Sensibilité aux poids extrêmes
+
+On ré-estime maintenant les deux configurations en capant les poids contrôle les plus élevés :
+
+- au percentile 99 : test léger ;
+- au percentile 95 : test plus conservateur.
+
+Après capping, les poids sont renormalisés afin de conserver le même poids total du groupe contrôle. L'idée n'est pas de remplacer l'estimation principale, mais de vérifier si le résultat dépend de quelques IRIS très fortement pondérés.
+
+```{r capped-weights-robustness}
+df_analysis$w_ebal_cap99 <- cap_and_rescale_weights(df_analysis, q = 0.99)
+df_analysis$w_ebal_cap95 <- cap_and_rescale_weights(df_analysis, q = 0.95)
+
+robustness_specs <- list(
+  list(label = "Config. 1 — poids EB originaux", formula = formula_config_1, weight = "w_ebal"),
+  list(label = "Config. 1 — poids capés p99", formula = formula_config_1, weight = "w_ebal_cap99"),
+  list(label = "Config. 1 — poids capés p95", formula = formula_config_1, weight = "w_ebal_cap95"),
+  list(label = "Config. 2 — poids EB originaux", formula = formula_config_2, weight = "w_ebal"),
+  list(label = "Config. 2 — poids capés p99", formula = formula_config_2, weight = "w_ebal_cap99"),
+  list(label = "Config. 2 — poids capés p95", formula = formula_config_2, weight = "w_ebal_cap95")
+)
+
+weight_models <- lapply(robustness_specs, function(s) {
+  list(
+    label = s$label,
+    weight = s$weight,
+    model = fit_weighted_model(s$formula, df_analysis, s$weight)
+  )
+})
+
+weight_robustness <- bind_rows(lapply(weight_models, function(s) {
+  extract_treated_inference(s$model, df_analysis, s$label) %>%
+    mutate(type_poids = s$weight)
+})) %>%
+  mutate(
+    conf_low_cluster_95 = estimate - 1.96 * se_cluster_commune,
+    conf_high_cluster_95 = estimate + 1.96 * se_cluster_commune,
+    conf_low_hc1_95 = estimate - 1.96 * se_hc1,
+    conf_high_hc1_95 = estimate + 1.96 * se_hc1
+  ) %>%
+  select(
+    modele, type_poids, estimate,
+    se_hc1, p_hc1, conf_low_hc1_95, conf_high_hc1_95,
+    se_cluster_commune, p_cluster_commune, conf_low_cluster_95, conf_high_cluster_95
+  )
+
+knitr::kable(weight_robustness, digits = 4)
+```
+
+```{r capped-weights-coefficient-plot}
+ggplot(weight_robustness, aes(x = modele, y = estimate)) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_point(size = 2.8) +
+  geom_errorbar(aes(ymin = conf_low_cluster_95, ymax = conf_high_cluster_95), width = 0.15) +
+  coord_flip() +
+  labs(
+    title = "Sensibilité de l'effet estimé aux poids extrêmes",
+    subtitle = "Intervalles à 95 % avec erreurs standards clusterisées par commune",
+    x = NULL,
+    y = "Coefficient treated"
+  ) +
+  theme_minimal()
+```
+
+**Comment interpréter ce test ?**
+
+- Si le coefficient reste proche entre les poids originaux, les poids capés p99 et les poids capés p95, le résultat est plus robuste.
+- Si le coefficient change fortement après capping, cela signifie que l'estimation dépend beaucoup des unités les plus pondérées.
+- Si la p-value change mais que le coefficient reste stable, le résultat peut être économiquement stable mais statistiquement moins précis.
+
+## Spécification plus simple : sans contrôles de régression additionnels
+
+Cette dernière vérification demande si le résultat dépend fortement de l'ajout des contrôles dans la régression finale. L'entropy balancing est toujours utilisé, mais la régression finale devient simplement :
+
+```r
+variation de l'outcome = constante + treated
+```
+
+Ce test est utile car, après un bon calage par entropy balancing, les contrôles de régression ne devraient pas complètement renverser le résultat.
+
+```{r simple-specification-robustness}
+formula_no_controls <- as.formula(paste(outcome_diff_name, "~ treated"))
+mod_no_controls <- fit_weighted_model(formula_no_controls, df_analysis, "w_ebal")
+
+simple_spec_comparison <- bind_rows(
+  extract_treated_inference(mod_no_controls, df_analysis, "Sans contrôles de régression"),
+  extract_treated_inference(mod_config_1, df_analysis, "Config. 1"),
+  extract_treated_inference(mod_config_2, df_analysis, "Config. 2")
+) %>%
+  select(modele, estimate, se_hc1, p_hc1, se_cluster_commune, p_cluster_commune)
+
+knitr::kable(simple_spec_comparison, digits = 4)
+```
+
+**Lecture attendue :**
+
+- Si les trois coefficients ont le même signe et un ordre de grandeur comparable, c'est rassurant.
+- Si l'ajout des contrôles change complètement le coefficient, cela suggère que les résultats sont sensibles à la spécification.
+- Dans ce cas, il faut présenter le résultat comme exploratoire plutôt que comme une preuve causale forte.
+
+## Synthèse automatique de robustesse
+
+```{r robustness-summary-text, results='asis'}
+main_cluster_p_1 <- inference_comparison$p_cluster_commune[1]
+main_cluster_p_2 <- inference_comparison$p_cluster_commune[2]
+coef_1 <- inference_comparison$estimate[1]
+coef_2 <- inference_comparison$estimate[2]
+
+cat("Pour interpréter les résultats, il faut privilégier les erreurs standards clusterisées par commune, car elles sont plus prudentes que les erreurs standards classiques.\n\n")
+
+if (sign(coef_1) == sign(coef_2)) {
+  cat("Les deux configurations donnent un coefficient de même signe, ce qui va dans le sens d'une certaine stabilité de la spécification.\n\n")
+} else {
+  cat("Les deux configurations donnent des coefficients de signe différent : le résultat est sensible à la spécification et doit être interprété avec prudence.\n\n")
+}
+
+if (!is.na(main_cluster_p_1) && !is.na(main_cluster_p_2)) {
+  if (main_cluster_p_1 < 0.05 && main_cluster_p_2 < 0.05) {
+    cat("Les deux configurations restent significatives à 5 % avec des erreurs standards clusterisées par commune. C'est le cas le plus favorable pour la robustesse statistique.\n")
+  } else if (main_cluster_p_1 < 0.10 && main_cluster_p_2 < 0.10) {
+    cat("Les deux configurations sont au moins significatives à 10 % avec cluster commune. Le résultat est suggestif, mais il faut éviter une conclusion trop forte.\n")
+  } else {
+    cat("Au moins une configuration n'est pas significative avec cluster commune. Il faut donc éviter de fonder la conclusion uniquement sur la p-value classique.\n")
+  }
+}
+```
+
+À retenir : dans ce projet, une p-value faible est convaincante seulement si elle résiste aux corrections robustes, aux clusters par commune et aux tests de sensibilité aux poids. Sinon, le résultat peut rester intéressant économiquement, mais il doit être présenté comme moins robuste statistiquement.
+
+
+# Interprétation agrégée pour Paris
+
+```{r paris-aggregate-effect}
+n_iris_paris <- sum(df_analysis$treated == 1)
+paris_reference_level <- sum(df_analysis[[outcome_post_1]][df_analysis$treated == 1], na.rm = TRUE)
+
+aggregate_effects <- compute_paris_effect(
+  treatment_comparison,
+  reference_level = paris_reference_level,
+  n_iris_paris = n_iris_paris
+) %>%
+  select(
+    configuration, estimate, std_error_hc1, p_value,
+    n_iris_paris, niveau_reference_paris,
+    effet_total_paris_indicatif, logements_perdus_indicatif,
+    effet_pct_reference, logements_perdus_pct_reference
+  )
+
+knitr::kable(aggregate_effects, digits = 4)
+```
+
+Le calcul agrégé ci-dessus est une extrapolation indicative : il multiplie l'effet moyen estimé par IRIS parisien par le nombre d'IRIS parisiens dans l'échantillon.
+
+La colonne `effet_total_paris_indicatif` donne l'effet total estimé sur le nombre de résidences principales en location à Paris. Si le coefficient est négatif, la colonne `logements_perdus_indicatif` traduit cet effet en nombre indicatif de logements locatifs perdus relativement au contrefactuel. La colonne `logements_perdus_pct_reference` exprime cette perte en pourcentage du niveau observé à Paris en `r post_y1`.
+
+## Effet agrégé selon les poids originaux et les poids capés
+
+```{r paris-aggregate-effect-weights}
+aggregate_effects_weights <- compute_paris_effect(
+  weight_robustness %>%
+    transmute(
+      configuration = modele,
+      estimate = estimate,
+      std_error_cluster = se_cluster_commune,
+      p_cluster_commune = p_cluster_commune,
+      type_poids = type_poids
+    ),
+  reference_level = paris_reference_level,
+  n_iris_paris = n_iris_paris
+) %>%
+  select(
+    configuration, type_poids, estimate, std_error_cluster, p_cluster_commune,
+    effet_total_paris_indicatif, logements_perdus_indicatif,
+    effet_pct_reference, logements_perdus_pct_reference
+  )
+
+knitr::kable(aggregate_effects_weights, digits = 4)
+```
+
+Ce second tableau répond à la question : « si l'effet est négatif, quel pourcentage du stock parisien de résidences principales en location représente-t-il ? ». Il faut lire ce résultat comme un **ordre de grandeur**, pas comme un comptage exact, car l'estimation principale reste un effet moyen par IRIS.
+
+# Graphiques de tendances, comme dans l'application
+
+## Tendance sur les quatre années utilisées dans l'estimation
+
+```{r trend-selected-years}
+trend_years <- sort(unique(c(pre_y1, pre_y2, post_y1, post_y2)))
+
+weights_iris <- df_analysis %>%
+  select(IRIS, code_com, treated, w_ebal) %>%
+  distinct()
+
+weights_controls <- df_analysis %>%
+  filter(treated == 0) %>%
+  select(IRIS, code_com, w_ebal) %>%
+  distinct()
+
+trend_data <- df_reduced %>%
+  filter(annee %in% trend_years) %>%
+  left_join(weights_controls, by = c("IRIS", "code_com")) %>%
+  mutate(
+    w_plot = ifelse(treated == 1, 1, w_ebal),
+    groupe = ifelse(treated == 1, "Paris", "Contrôle pondéré")
+  ) %>%
+  filter(treated == 1 | !is.na(w_plot))
+
+trend_plot <- trend_data %>%
+  group_by(groupe, annee) %>%
+  summarise(
+    mean_outcome = safe_weighted_mean(.data[[outcome_var]], w_plot),
+    .groups = "drop"
+  ) %>%
+  arrange(annee, groupe)
+
+knitr::kable(trend_plot, digits = 3)
+
+p_trend <- ggplot(trend_plot, aes(x = annee, y = mean_outcome, color = groupe, group = groupe)) +
+  geom_line(linewidth = 1.2) +
+  geom_point(size = 3) +
+  geom_vline(xintercept = pre_y2, linetype = "dashed") +
+  geom_vline(xintercept = post_y1, linetype = "dotted") +
+  scale_x_continuous(breaks = trend_years) +
+  labs(
+    title = paste0("Évolution de ", outcome_var, " : Paris vs contrôle pondéré"),
+    subtitle = paste0("Calage EB sur niveaux ", ebal_level_year, " et pré-trend ", pre_y1, "-", pre_y2),
+    x = "Année",
+    y = paste0("Moyenne pondérée de ", outcome_var),
+    color = "Groupe"
+  ) +
+  theme_minimal()
+
+p_trend
+```
+
+## Tendance indexée sur les quatre années utilisées dans l'estimation
+
+```{r trend-selected-years-index}
+trend_plot_index <- trend_plot %>%
+  group_by(groupe) %>%
+  mutate(
+    base_year = min(annee),
+    base_value = mean_outcome[annee == base_year][1],
+    evol_depuis_base = mean_outcome - base_value
+  ) %>%
+  ungroup()
+
+p_trend_index <- ggplot(trend_plot_index, aes(x = annee, y = evol_depuis_base, color = groupe, group = groupe)) +
+  geom_line(linewidth = 1.2) +
+  geom_point(size = 3) +
+  geom_vline(xintercept = pre_y2, linetype = "dashed") +
+  geom_vline(xintercept = post_y1, linetype = "dotted") +
+  scale_x_continuous(breaks = trend_years) +
+  labs(
+    title = "Évolution cumulée depuis l'année de base",
+    subtitle = paste0("Outcome : ", outcome_var),
+    x = "Année",
+    y = "Variation par rapport à l'année de base",
+    color = "Groupe"
+  ) +
+  theme_minimal()
+
+p_trend_index
+```
+
+## Tendances avec poids originaux, poids capés p99 et poids capés p95
+
+Les graphiques précédents utilisent les poids EB originaux. Comme les poids peuvent influencer le contrefactuel, on affiche aussi les tendances obtenues avec les poids capés.
+
+L'objectif est simple : si la trajectoire du contrôle pondéré change beaucoup quand on limite les poids extrêmes, le résultat dépend fortement de quelques IRIS contrôle. Si les trajectoires restent proches, le contrefactuel est plus stable.
+
+```{r trend-selected-years-by-weight}
+weight_scenarios <- tibble(
+  type_poids = c("w_ebal", "w_ebal_cap99", "w_ebal_cap95"),
+  libelle_poids = c("Poids EB originaux", "Poids capés p99", "Poids capés p95")
+)
+
+trend_by_weight <- bind_rows(lapply(seq_len(nrow(weight_scenarios)), function(i) {
+  weight_col <- weight_scenarios$type_poids[i]
+  label <- weight_scenarios$libelle_poids[i]
+
+  weights_tmp <- df_analysis %>%
+    filter(treated == 0) %>%
+    transmute(IRIS, code_com, w = .data[[weight_col]]) %>%
+    distinct()
+
+  df_reduced %>%
+    filter(annee %in% trend_years) %>%
+    left_join(weights_tmp, by = c("IRIS", "code_com")) %>%
+    mutate(
+      w_plot = ifelse(treated == 1, 1, w),
+      groupe = ifelse(treated == 1, "Paris", "Contrôle pondéré"),
+      type_poids = label
+    ) %>%
+    filter(treated == 1 | !is.na(w_plot)) %>%
+    group_by(type_poids, groupe, annee) %>%
+    summarise(
+      mean_outcome = safe_weighted_mean(.data[[outcome_var]], w_plot),
+      .groups = "drop"
+    )
+}))
+
+knitr::kable(trend_by_weight, digits = 3)
+
+p_trend_by_weight <- ggplot(trend_by_weight, aes(x = annee, y = mean_outcome, color = groupe, group = groupe)) +
+  geom_line(linewidth = 1.1) +
+  geom_point(size = 2.5) +
+  geom_vline(xintercept = pre_y2, linetype = "dashed") +
+  geom_vline(xintercept = post_y1, linetype = "dotted") +
+  facet_wrap(~ type_poids) +
+  scale_x_continuous(breaks = trend_years) +
+  labs(
+    title = paste0("Tendances de ", outcome_var, " selon le traitement des poids extrêmes"),
+    subtitle = "Comparer les panneaux permet de voir si le contrefactuel dépend de quelques poids très élevés",
+    x = "Année",
+    y = paste0("Moyenne pondérée de ", outcome_var),
+    color = "Groupe"
+  ) +
+  theme_minimal()
+
+p_trend_by_weight
+```
+
+```{r trend-selected-years-index-by-weight}
+trend_by_weight_index <- trend_by_weight %>%
+  group_by(type_poids, groupe) %>%
+  mutate(
+    base_year = min(annee),
+    base_value = mean_outcome[annee == base_year][1],
+    evol_depuis_base = mean_outcome - base_value
+  ) %>%
+  ungroup()
+
+p_trend_by_weight_index <- ggplot(trend_by_weight_index, aes(x = annee, y = evol_depuis_base, color = groupe, group = groupe)) +
+  geom_line(linewidth = 1.1) +
+  geom_point(size = 2.5) +
+  geom_vline(xintercept = pre_y2, linetype = "dashed") +
+  geom_vline(xintercept = post_y1, linetype = "dotted") +
+  facet_wrap(~ type_poids) +
+  scale_x_continuous(breaks = trend_years) +
+  labs(
+    title = "Tendances indexées selon le traitement des poids extrêmes",
+    subtitle = "Base zéro à la première année affichée",
+    x = "Année",
+    y = "Variation depuis l'année de base",
+    color = "Groupe"
+  ) +
+  theme_minimal()
+
+p_trend_by_weight_index
+```
+
+## Tendance complète avec toutes les années disponibles
+
+```{r trend-full}
+df_full_trend <- df_reduced %>%
+  filter(annee >= min(available_years), annee <= max(available_years)) %>%
+  left_join(weights_controls, by = c("IRIS", "code_com")) %>%
+  mutate(
+    w_plot = ifelse(treated == 1, 1, w_ebal),
+    groupe = ifelse(treated == 1, "Paris", "Contrôle pondéré")
+  ) %>%
+  filter(treated == 1 | !is.na(w_plot))
+
+trend_full <- df_full_trend %>%
+  group_by(groupe, annee) %>%
+  summarise(
+    mean_outcome = safe_weighted_mean(.data[[outcome_var]], w_plot),
+    .groups = "drop"
+  ) %>%
+  arrange(annee, groupe)
+
+p_trend_full <- ggplot(trend_full, aes(x = annee, y = mean_outcome, color = groupe, group = groupe)) +
+  geom_line(linewidth = 1.2) +
+  geom_point(size = 2.8) +
+  geom_vline(xintercept = pre_y1, linetype = "dotted") +
+  geom_vline(xintercept = pre_y2, linetype = "dashed") +
+  geom_vline(xintercept = post_y1, linetype = "dotted") +
+  geom_vline(xintercept = post_y2, linetype = "dashed") +
+  scale_x_continuous(breaks = sort(unique(trend_full$annee))) +
+  labs(
+    title = "Tendance complète — toutes les années disponibles",
+    subtitle = paste0("Variable : ", outcome_var),
+    x = "Année",
+    y = paste0("Moyenne pondérée de ", outcome_var),
+    color = "Groupe"
+  ) +
+  theme_minimal()
+
+p_trend_full
+```
+
+## Tendance complète indexée
+
+```{r trend-full-index}
+trend_full_index <- trend_full %>%
+  group_by(groupe) %>%
+  mutate(
+    base_year = min(annee),
+    base_value = mean_outcome[annee == base_year][1],
+    evol_depuis_base = mean_outcome - base_value
+  ) %>%
+  ungroup()
+
+p_trend_full_index <- ggplot(trend_full_index, aes(x = annee, y = evol_depuis_base, color = groupe, group = groupe)) +
+  geom_line(linewidth = 1.2) +
+  geom_point(size = 2.8) +
+  geom_vline(xintercept = pre_y1, linetype = "dotted") +
+  geom_vline(xintercept = pre_y2, linetype = "dashed") +
+  geom_vline(xintercept = post_y1, linetype = "dotted") +
+  geom_vline(xintercept = post_y2, linetype = "dashed") +
+  scale_x_continuous(breaks = sort(unique(trend_full_index$annee))) +
+  labs(
+    title = "Tendance complète indexée — toutes les années disponibles",
+    subtitle = paste0("Variable : ", outcome_var),
+    x = "Année",
+    y = "Variation par rapport à l'année de base",
+    color = "Groupe"
+  ) +
+  theme_minimal()
+
+p_trend_full_index
+```
+
+## Décomposition année par année entre les deux années de pré-traitement
+
+```{r trend-micro-preperiod}
+df_micro <- df_reduced %>%
+  filter(annee >= pre_y1, annee <= pre_y2) %>%
+  left_join(weights_iris, by = c("IRIS", "code_com", "treated")) %>%
+  filter(!is.na(w_ebal)) %>%
+  mutate(groupe = ifelse(treated == 1, "Paris", "Contrôle pondéré"))
+
+trend_micro <- df_micro %>%
+  group_by(groupe, annee) %>%
+  summarise(
+    mean_outcome = safe_weighted_mean(.data[[outcome_var]], w_ebal),
+    .groups = "drop"
+  ) %>%
+  arrange(annee, groupe)
+
+knitr::kable(trend_micro, digits = 3)
+
+p_trend_micro <- ggplot(trend_micro, aes(x = annee, y = mean_outcome, color = groupe, group = groupe)) +
+  geom_line(linewidth = 1.2) +
+  geom_point(size = 2.8) +
+  scale_x_continuous(breaks = sort(unique(trend_micro$annee))) +
+  labs(
+    title = "Décomposition année par année — niveaux",
+    subtitle = paste0("Entre ", pre_y1, " et ", pre_y2, " ; outcome : ", outcome_var),
+    x = "Année",
+    y = paste0("Moyenne pondérée de ", outcome_var),
+    color = "Groupe"
+  ) +
+  theme_minimal()
+
+p_trend_micro
+```
+
+## Décomposition année par année indexée entre les deux années de pré-traitement
+
+```{r trend-micro-preperiod-index}
+trend_micro_index <- trend_micro %>%
+  group_by(groupe) %>%
+  mutate(
+    base_year = min(annee),
+    base_value = mean_outcome[annee == base_year][1],
+    evol_depuis_base = mean_outcome - base_value
+  ) %>%
+  ungroup()
+
+p_trend_micro_index <- ggplot(trend_micro_index, aes(x = annee, y = evol_depuis_base, color = groupe, group = groupe)) +
+  geom_line(linewidth = 1.2) +
+  geom_point(size = 2.8) +
+  scale_x_continuous(breaks = sort(unique(trend_micro_index$annee))) +
+  labs(
+    title = "Décomposition année par année — base 0",
+    subtitle = paste0("Entre ", pre_y1, " et ", pre_y2, " ; outcome : ", outcome_var),
+    x = "Année",
+    y = "Variation par rapport à l'année de base",
+    color = "Groupe"
+  ) +
+  theme_minimal()
+
+p_trend_micro_index
+```
+
+# Diagnostic des poids
+
+```{r weights-diagnostics}
+weights_summary <- df_analysis %>%
+  filter(treated == 0) %>%
+  summarise(
+    n_controles = n(),
+    poids_min = min(w_ebal, na.rm = TRUE),
+    poids_p1 = quantile(w_ebal, 0.01, na.rm = TRUE),
+    poids_p5 = quantile(w_ebal, 0.05, na.rm = TRUE),
+    poids_median = median(w_ebal, na.rm = TRUE),
+    poids_moyen = mean(w_ebal, na.rm = TRUE),
+    poids_p95 = quantile(w_ebal, 0.95, na.rm = TRUE),
+    poids_p99 = quantile(w_ebal, 0.99, na.rm = TRUE),
+    poids_max = max(w_ebal, na.rm = TRUE),
+    poids_total = sum(w_ebal, na.rm = TRUE)
+  )
+
+knitr::kable(weights_summary, digits = 4)
+```
+
+## Histogramme des poids
+
+```{r weights-histogram}
+p_weights_hist <- ggplot(df_analysis %>% filter(treated == 0), aes(x = w_ebal)) +
+  geom_histogram(bins = 40) +
+  labs(
+    title = "Distribution des poids entropy balancing",
+    x = "Poids",
+    y = "Nombre d'observations"
+  ) +
+  theme_minimal()
+
+p_weights_hist
+```
+
+## Densité des poids
+
+```{r weights-density}
+p_weights_density <- ggplot(df_analysis %>% filter(treated == 0), aes(x = w_ebal)) +
+  geom_density() +
+  labs(
+    title = "Densité des poids entropy balancing",
+    x = "Poids",
+    y = "Densité"
+  ) +
+  theme_minimal()
+
+p_weights_density
+```
+
+# Contribution des communes contrôle
+
+```{r commune-contributions}
+weights_by_commune <- df_analysis %>%
+  filter(treated == 0) %>%
+  group_by(code_com) %>%
+  summarise(poids_total = sum(w_ebal, na.rm = TRUE), .groups = "drop")
+
+if (!is.null(commune_names)) {
+  commune_lookup <- commune_names %>%
+    transmute(code_com = as.character(COM), nom_commune = LIBELLE) %>%
+    distinct()
+
+  weights_by_commune <- weights_by_commune %>%
+    left_join(commune_lookup, by = "code_com")
+} else {
+  weights_by_commune <- weights_by_commune %>%
+    mutate(nom_commune = NA_character_)
+}
+
+weights_by_commune <- weights_by_commune %>%
+  mutate(nom_affiche = ifelse(is.na(nom_commune) | nom_commune == "", code_com, nom_commune)) %>%
+  arrange(desc(poids_total))
+
+top_communes <- weights_by_commune %>%
+  slice_head(n = top_n_communes)
+
+knitr::kable(top_communes, digits = 4)
+
+p_weights_barplot <- ggplot(top_communes, aes(x = reorder(nom_affiche, poids_total), y = poids_total)) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    title = paste0("Top ", nrow(top_communes), " des communes contribuant au contrefactuel de Paris"),
+    x = "Commune",
+    y = "Poids total"
+  ) +
+  theme_minimal()
+
+p_weights_barplot
+```
+
+# Export des résultats et des graphiques
+
+```{r export-results}
+export_dir <- "outputs_did_ebal"
+dir.create(export_dir, showWarnings = FALSE)
+
+fwrite(df_analysis, file.path(export_dir, "base_analyse_did_ebal.csv"))
+fwrite(balance_table, file.path(export_dir, "balance_table.csv"))
+fwrite(balance_moments_table, file.path(export_dir, "balance_moments_table.csv"))
+fwrite(results_all, file.path(export_dir, "resultats_regressions.csv"))
+fwrite(regression_results_full, file.path(export_dir, "resultats_regressions_complets.csv"))
+fwrite(treatment_comparison, file.path(export_dir, "comparaison_effets_traitement.csv"))
+fwrite(inference_comparison, file.path(export_dir, "robustesse_pvalues_classique_hc1_cluster.csv"))
+fwrite(weight_concentration, file.path(export_dir, "diagnostic_concentration_poids.csv"))
+fwrite(weight_robustness, file.path(export_dir, "robustesse_poids_capes.csv"))
+fwrite(simple_spec_comparison, file.path(export_dir, "robustesse_specification_sans_controles.csv"))
+fwrite(aggregate_effects, file.path(export_dir, "effets_agreges_paris_indicatifs.csv"))
+fwrite(aggregate_effects_weights, file.path(export_dir, "effets_agreges_paris_poids_capes.csv"))
+fwrite(trend_plot, file.path(export_dir, "tendances_annees_estimation.csv"))
+fwrite(trend_by_weight, file.path(export_dir, "tendances_annees_estimation_selon_poids.csv"))
+fwrite(trend_full, file.path(export_dir, "tendances_toutes_annees.csv"))
+fwrite(trend_micro, file.path(export_dir, "tendances_pretraitement_annee_par_annee.csv"))
+fwrite(weights_by_commune, file.path(export_dir, "poids_par_commune.csv"))
+
+ggsave(file.path(export_dir, "01_tendance_annees_estimation.png"), p_trend, width = 10, height = 6, dpi = 300)
+ggsave(file.path(export_dir, "02_tendance_annees_estimation_indexee.png"), p_trend_index, width = 10, height = 6, dpi = 300)
+ggsave(file.path(export_dir, "03_tendance_selon_poids.png"), p_trend_by_weight, width = 12, height = 7, dpi = 300)
+ggsave(file.path(export_dir, "04_tendance_indexee_selon_poids.png"), p_trend_by_weight_index, width = 12, height = 7, dpi = 300)
+ggsave(file.path(export_dir, "05_tendance_complete.png"), p_trend_full, width = 10, height = 6, dpi = 300)
+ggsave(file.path(export_dir, "06_tendance_complete_indexee.png"), p_trend_full_index, width = 10, height = 6, dpi = 300)
+ggsave(file.path(export_dir, "07_tendance_pretraitement_micro.png"), p_trend_micro, width = 10, height = 6, dpi = 300)
+ggsave(file.path(export_dir, "08_tendance_pretraitement_micro_indexee.png"), p_trend_micro_index, width = 10, height = 6, dpi = 300)
+ggsave(file.path(export_dir, "09_distribution_poids_histogramme.png"), p_weights_hist, width = 10, height = 6, dpi = 300)
+ggsave(file.path(export_dir, "10_distribution_poids_densite_sans_nb_RP_1_piece.png"), p_weights_density, width = 10, height = 6, dpi = 300)
+ggsave(file.path(export_dir, "11_contribution_communes.png"), p_weights_barplot, width = 10, height = 12, dpi = 300)
+
+list.files(export_dir)
+```
+
+# Notes méthodologiques
+
+1. Le coefficient `treated` dans les régressions pondérées mesure la différence de variation de `r params$outcome_var` entre Paris et le contrôle pondéré sur la période `r params$post_y1`-`r params$post_y2`.
+2. L'entropy balancing est commun aux deux configurations et cale aussi sur la variation pré-traitement de `nb_logements`. La comparaison entre Config. 1 et Config. 2 porte uniquement sur l'inclusion ou non de la variation post-traitement de `nb_logements` dans la régression finale.
+3. `nb_logements` est utilisé comme variable de niveau commune aux deux configurations, comme différence pré-traitement dans l'EB commun, et comme contrôle de régression uniquement dans Config. 1 ; l'outcome d'intérêt reste `nb_RP_en_loc`.
+4. Les erreurs standards sont comparées selon trois approches : classiques, robustes HC1 et clusterisées au niveau de la commune. Les p-values clusterisées sont les plus prudentes et doivent être privilégiées dans l'interprétation principale.
+5. Le document impose des écarts de cinq ans pour les périodes pré-traitement et traitement, conformément à la contrainte de rotation des sondages IRIS.
