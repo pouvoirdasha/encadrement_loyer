@@ -1,16 +1,6 @@
 # =============================================================================
 # RÉGRESSIONS DiD – ENCADREMENT DES LOYERS
-# Spécification :
-#   Y_it = α + β(G_i × T_t) + γ G_i + δ T_t + X_it'θ + μ_i + ν_commune + ε_it
-#
-#   où T_t = 1 si annee == 2022 (post-traitement)
-#      G_i = 1 si IRIS traité
-#      μ_i     = effets fixes IRIS
-#      ν_comm  = effets fixes commune
-#
-# DID bitemporel : 2017 (pré) vs 2022 (post)
-# Trois jeux de matchings : Paris-Lille full | Paris-Lille 3 ans | Paris full
-# Sorties : tableaux LaTeX + CSV dans 8-Matching/regressions/
+
 # =============================================================================
 
 # -----------------------------------------------------------------------------
@@ -146,14 +136,14 @@ prepare_did <- function(paires, bdd, annees = ANNEES_DID,
     message(glue("  Filtrage population (IRIS) : {n_distinct(panel$IRIS)} IRIS retenus"))
 
   } else {
-    message("  ⚠ Variable 'pop_totale' absente – filtrage population ignoré.")
+    message(" Variable 'pop_totale' absente – filtrage population ignoré.")
   }
 
   # Variables de contrôle disponibles
   vars_ctrl_dispo <- intersect(VARS_CONTROLE, names(panel))
   if (length(vars_ctrl_dispo) < length(VARS_CONTROLE)) {
     manquantes <- setdiff(VARS_CONTROLE, names(panel))
-    message(glue("  ⚠ Variables de contrôle absentes : {paste(manquantes, collapse=', ')}"))
+    message(glue(" Variables de contrôle absentes : {paste(manquantes, collapse=', ')}"))
   }
 
   # Colonne commune (extraire les 5 premiers chiffres de l'IRIS = code commune INSEE)
@@ -201,7 +191,7 @@ run_did <- function(panel, label) {
  
   # Vérification variable dépendante
   if (!VAR_DEP %in% names(panel)) {
-    stop(glue("❌ Variable dépendante '{VAR_DEP}' absente du panel."))
+    stop(glue(" Variable dépendante '{VAR_DEP}' absente du panel."))
   }
  
   # --------------------------------------------------------------------------
@@ -367,52 +357,7 @@ export_results <- function(modeles, label, dir_out) {
   write_csv(coef_df, csv_path)
   message(glue("  ✓ CSV coefficients : {csv_path}"))
 
-  # ---- 3. Table LaTeX -------------------------------------------------------
-  latex_table <- modelsummary(
-    modeles,
-    coef_rename  = COEF_LABELS,
-    coef_omit    = "Intercept",
-    statistic    = "({std.error})",
-    stars        = c("*" = 0.1, "**" = 0.05, "***" = 0.01),
-    gof_map      = c("nobs", "r.squared", "adj.r.squared",
-                     "rmse", "FE: IRIS", "FE: commune"),
-    title        = glue("Estimation DiD – {label}"),
-    notes        = list(
-      "Erreurs-types clusterisées au niveau commune entre parenthèses.",
-      "* p<0,10 ; ** p<0,05 ; *** p<0,01",
-      glue("Variable dépendante : {VAR_DEP}. Période : {ANNEE_PRE}–{ANNEE_POST}.")
-    ),
-    output = "latex_tabular"
-  )
-
-  latex_path <- file.path(dir_out, glue("table_{safe_label}.tex"))
-  writeLines(paste(as.character(latex_table), collapse = "\n"), path)
-  message(glue("  ✓ Table LaTeX    : {latex_path}"))
-
-  # ---- 4. Table HTML (pour vérification rapide) ----------------------------
-  html_table <- modelsummary(
-    modeles,
-    coef_rename  = COEF_LABELS,
-    coef_omit    = "Intercept",
-    statistic    = "({std.error})",
-    stars        = c("*" = 0.1, "**" = 0.05, "***" = 0.01),
-    gof_map      = c("nobs", "r.squared", "adj.r.squared",
-                     "rmse", "FE: IRIS", "FE: commune"),
-    title        = glue("Estimation DiD – {label}"),
-    output       = "html"
-  )
-
-  html_path <- file.path(dir_out, glue("table_{safe_label}.html"))
-  writeLines(html_table, html_path)
-  message(glue("  ✓ Table HTML     : {html_path}"))
-
-  invisible(coef_df)
-}
-
-#' Graphique des coefficients β (coefficient plot) sur les 3 spécifications
-#'
-#' @param coef_df   data.frame issu de export_results (tous matchings combinés)
-#' @param dir_out   dossier de sortie
+ 
 plot_coef <- function(coef_df, dir_out) {
 
   # Filtrer uniquement le coefficient d'intérêt
